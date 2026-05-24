@@ -1097,6 +1097,19 @@ class AuthFlowTest {
                 .andExpect(jsonPath("$.data.emailOpenRate.value").value(0.0));
     }
 
+    @Test
+    void accessTokenCarriesVerticalPlanAndActiveModules() throws Exception {
+        String token = signupVerticalAndLogin("claims-a", "owner@claims.test", "fashion");
+
+        JsonNode claims = decodeJwtClaims(token);
+        assertEquals("fashion", claims.path("vertical").asText());
+        assertEquals("starter", claims.path("plan").asText());   // no plan set -> normalised to starter
+        String modules = claims.path("activeModules").toString();
+        assertTrue(modules.contains("\"website\""), "activeModules has website: " + modules);
+        assertTrue(modules.contains("\"crm\""), "activeModules has crm: " + modules);
+        assertTrue(modules.contains("\"orders.fashion\""), "fashion starter has orders.fashion: " + modules);
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private void signup(String slug, String adminEmail) throws Exception {
@@ -1236,5 +1249,11 @@ class AuthFlowTest {
 
     private static String bearer(String token) {
         return "Bearer " + token;
+    }
+
+    /** Decodes a JWT's payload (claims) without verifying the signature. */
+    private JsonNode decodeJwtClaims(String token) throws Exception {
+        String payload = token.split("\\.")[1];
+        return objectMapper.readTree(java.util.Base64.getUrlDecoder().decode(payload));
     }
 }

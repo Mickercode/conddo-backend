@@ -4,6 +4,7 @@ import io.conddo.core.audit.AuditActions;
 import io.conddo.core.audit.AuditService;
 import io.conddo.core.domain.Tenant;
 import io.conddo.core.domain.User;
+import io.conddo.core.registry.VerticalToolMatrix;
 import io.conddo.core.repository.TenantRepository;
 import io.conddo.core.repository.UserRepository;
 import io.conddo.core.tenant.TenantContext;
@@ -38,6 +39,7 @@ public class AuthService {
     private final RefreshTokenService refreshTokenService;
     private final LockoutPolicy lockoutPolicy;
     private final AuditService auditService;
+    private final VerticalToolMatrix toolMatrix;
     private final AuthProperties properties;
     private final Clock clock;
 
@@ -47,7 +49,8 @@ public class AuthService {
     public AuthService(TenantRepository tenantRepository, UserRepository userRepository,
                        TenantSession tenantSession, PasswordHasher passwordHasher, JwtService jwtService,
                        RefreshTokenService refreshTokenService, LockoutPolicy lockoutPolicy,
-                       AuditService auditService, AuthProperties properties, Clock clock) {
+                       AuditService auditService, VerticalToolMatrix toolMatrix,
+                       AuthProperties properties, Clock clock) {
         this.tenantRepository = tenantRepository;
         this.userRepository = userRepository;
         this.tenantSession = tenantSession;
@@ -56,9 +59,17 @@ public class AuthService {
         this.refreshTokenService = refreshTokenService;
         this.lockoutPolicy = lockoutPolicy;
         this.auditService = auditService;
+        this.toolMatrix = toolMatrix;
         this.properties = properties;
         this.clock = clock;
         this.timingEqualiserHash = passwordHasher.hash("timing-equaliser");
+    }
+
+    /** Issues an access token stamped with the tenant's vertical/plan/activeModules (§4.4). */
+    private String issueAccessTokenFor(User user, Tenant tenant) {
+        return jwtService.issueAccessToken(user.getId(), user.getTenantId(), user.getRole(),
+                tenant.getVerticalId(), toolMatrix.normalizePlan(tenant.getPlanId()),
+                toolMatrix.resolve(tenant.getVerticalId(), tenant.getPlanId()));
     }
 
     /**
@@ -103,7 +114,7 @@ public class AuthService {
         user.recordSuccessfulLogin(now);
         userRepository.save(user);
 
-        String accessToken = jwtService.issueAccessToken(user.getId(), user.getTenantId(), user.getRole());
+        String accessToken = issueAccessTokenFor(user, tenant);
         String refreshToken = refreshTokenService.issue(user.getId(), user.getTenantId());
         auditService.record(AuditActions.LOGIN, "USER", user.getId(), user.getTenantId(), user.getId(), null, null);
         return new AuthResult(accessToken, jwtService.accessTokenTtl(),
@@ -131,8 +142,10 @@ public class AuthService {
         User user = userRepository.findById(rotation.userId())
                 .filter(User::isActive)
                 .orElseThrow(InvalidRefreshTokenException::new);
+        Tenant tenant = tenantRepository.findById(rotation.tenantId())
+                .orElseThrow(InvalidRefreshTokenException::new);
 
-        String accessToken = jwtService.issueAccessToken(user.getId(), user.getTenantId(), user.getRole());
+        String accessToken = issueAccessTokenFor(user, tenant);
         return new AuthResult(accessToken, jwtService.accessTokenTtl(),
                 rotation.rawToken(), properties.refreshTokenTtl(), user.getId(), user.getRole());
     }

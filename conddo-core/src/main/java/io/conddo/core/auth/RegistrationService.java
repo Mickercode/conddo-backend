@@ -3,7 +3,9 @@ package io.conddo.core.auth;
 import io.conddo.core.audit.AuditActions;
 import io.conddo.core.audit.AuditService;
 import io.conddo.core.domain.PendingRegistration;
+import io.conddo.core.domain.Tenant;
 import io.conddo.core.notify.NotificationService;
+import io.conddo.core.registry.VerticalToolMatrix;
 import io.conddo.core.repository.PendingRegistrationRepository;
 import io.conddo.core.service.TenantService;
 import org.springframework.stereotype.Service;
@@ -37,6 +39,7 @@ public class RegistrationService {
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
     private final AuditService auditService;
+    private final VerticalToolMatrix toolMatrix;
     private final AuthProperties authProperties;
     private final OtpProperties otp;
     private final Clock clock;
@@ -46,8 +49,8 @@ public class RegistrationService {
     public RegistrationService(PendingRegistrationRepository registrations, PasswordHasher passwordHasher,
                                NotificationService notificationService, TenantService tenantService,
                                JwtService jwtService, RefreshTokenService refreshTokenService,
-                               AuditService auditService, AuthProperties authProperties, OtpProperties otp,
-                               Clock clock) {
+                               AuditService auditService, VerticalToolMatrix toolMatrix,
+                               AuthProperties authProperties, OtpProperties otp, Clock clock) {
         this.registrations = registrations;
         this.passwordHasher = passwordHasher;
         this.notificationService = notificationService;
@@ -55,6 +58,7 @@ public class RegistrationService {
         this.jwtService = jwtService;
         this.refreshTokenService = refreshTokenService;
         this.auditService = auditService;
+        this.toolMatrix = toolMatrix;
         this.authProperties = authProperties;
         this.otp = otp;
         this.clock = clock;
@@ -69,7 +73,7 @@ public class RegistrationService {
                 fullName, phone, email, passwordHasher.hash(rawPassword),
                 passwordHasher.hash(code), now.plus(otp.ttl()), now);
         registrations.save(registration);
-        notificationService.sendOtp(phone, code);
+        notificationService.sendOtpEmail(email, code); // free path (Resend); swap to sendOtp(phone,code) once SMS is funded
         return new StartResult(registration.getId(), otp.resendCooldown().toSeconds());
     }
 
@@ -110,7 +114,7 @@ public class RegistrationService {
         String code = generateCode();
         registration.newCode(passwordHasher.hash(code), now.plus(otp.ttl()), now);
         registrations.save(registration);
-        notificationService.sendOtp(registration.getPhone(), code);
+        notificationService.sendOtpEmail(registration.getEmail(), code); // free path (Resend)
         return otp.resendCooldown().toSeconds();
     }
 
@@ -128,10 +132,13 @@ public class RegistrationService {
         registrations.save(registration);
 
         var admin = provisioned.admin();
-        auditService.record(AuditActions.SIGNUP_COMPLETED, "TENANT", provisioned.tenant().getId(),
-                provisioned.tenant().getId(), admin.getId(), null, Map.of("businessName", businessName));
+        Tenant tenant = provisioned.tenant();
+        auditService.record(AuditActions.SIGNUP_COMPLETED, "TENANT", tenant.getId(),
+                tenant.getId(), admin.getId(), null, Map.of("businessName", businessName));
 
-        String accessToken = jwtService.issueAccessToken(admin.getId(), admin.getTenantId(), admin.getRole());
+        String accessToken = jwtService.issueAccessToken(admin.getId(), admin.getTenantId(), admin.getRole(),
+                tenant.getVerticalId(), toolMatrix.normalizePlan(tenant.getPlanId()),
+                toolMatrix.resolve(tenant.getVerticalId(), tenant.getPlanId()));
         String refreshToken = refreshTokenService.issue(admin.getId(), admin.getTenantId());
         return new AuthResult(accessToken, jwtService.accessTokenTtl(), refreshToken,
                 authProperties.refreshTokenTtl(), admin.getId(), admin.getRole());

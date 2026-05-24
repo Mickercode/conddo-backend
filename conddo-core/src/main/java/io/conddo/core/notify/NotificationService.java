@@ -23,9 +23,16 @@ public class NotificationService {
         this.emailSender = emailSender;
     }
 
-    /** Signup phone verification — the 4-digit code by SMS. */
+    /** Signup verification code by SMS (needs a funded SMS provider, e.g. Brevo credits). */
     public void sendOtp(String phone, String code) {
         smsSender.send(phone, "Your Conddo verification code is " + code);
+    }
+
+    /** Signup verification code by email — the free path (Resend), no SMS credits needed. */
+    public void sendOtpEmail(String toEmail, String code) {
+        emailSender.send(toEmail, "Your Conddo verification code",
+                "Your Conddo verification code is " + code + ".\n\n"
+                        + "It expires shortly. If you didn't request this, you can ignore this email.");
     }
 
     /** Password reset — delivers the reset token by email. */

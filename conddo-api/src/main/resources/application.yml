@@ -43,15 +43,18 @@ conddo:
     secret-key: ${CONDDO_MINIO_PASSWORD:conddo_secret_change_me}
     bucket: ${CONDDO_MINIO_BUCKET:conddo}
 
-  # Notification channels (PRD §6.4). provider 'log' = stub (the default); set
-  # 'termii' / 'resend' + credentials to deliver for real.
+  # Notification channels (PRD §6.4). provider 'log' = stub (the default).
+  # SMS via Brevo (set provider=brevo + CONDDO_BREVO_API_KEY); email via Resend
+  # (set provider=resend + CONDDO_RESEND_API_KEY + a verified CONDDO_EMAIL_FROM).
   notifications:
     sms:
+      # log (stub) | brevo | termii
       provider: ${CONDDO_SMS_PROVIDER:log}
-      base-url: ${CONDDO_TERMII_BASE_URL:https://api.ng.termii.com}
-      api-key: ${CONDDO_TERMII_API_KEY:}
-      sender-id: ${CONDDO_TERMII_SENDER_ID:Conddo}
+      base-url: ${CONDDO_SMS_BASE_URL:https://api.brevo.com}
+      api-key: ${CONDDO_BREVO_API_KEY:${CONDDO_TERMII_API_KEY:}}
+      sender-id: ${CONDDO_SMS_SENDER_ID:Conddo}
     email:
+      # log (stub) | resend
       provider: ${CONDDO_EMAIL_PROVIDER:log}
       base-url: ${CONDDO_RESEND_BASE_URL:https://api.resend.com}
       api-key: ${CONDDO_RESEND_API_KEY:}

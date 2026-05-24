@@ -65,7 +65,8 @@ class AuthServiceLockoutTest {
         when(hasher.hash(anyString())).thenReturn("HASH");
         when(hasher.matches(eq(CORRECT), anyString())).thenReturn(true);
         authService = new AuthService(tenantRepository, userRepository, tenantSession, hasher,
-                jwtService, refreshTokenService, new LockoutPolicy(props), auditService, props, clock);
+                jwtService, refreshTokenService, new LockoutPolicy(props), auditService,
+                new io.conddo.core.registry.VerticalToolMatrix(), props, clock);
     }
 
     private User givenUser() {
@@ -129,7 +130,8 @@ class AuthServiceLockoutTest {
         user = givenUser();
         user.recordFailedLogin();
         user.recordFailedLogin();
-        when(jwtService.issueAccessToken(any(), any(), anyString())).thenReturn("access.jwt.token");
+        when(jwtService.issueAccessToken(any(), any(), anyString(), any(), any(), any()))
+                .thenReturn("access.jwt.token");
         when(jwtService.accessTokenTtl()).thenReturn(Duration.ofMinutes(15));
         when(refreshTokenService.issue(any(), any())).thenReturn("selector.verifier");
 

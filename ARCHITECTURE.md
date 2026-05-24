@@ -44,7 +44,8 @@ Three core principles: **Configuration over code** (verticals in YAML, not Java)
 **Key decisions:** Java 21 + Spring Boot 3 backend · Custom JWT + Spring Security ·
 module pattern = inheritance from abstract `BaseModule` · activation = YAML-driven factory ·
 tenant isolation = PostgreSQL RLS + session variable · inter-module comms = Redis Pub/Sub ·
-self-hosted Postgres + MinIO · **notifications via Brevo (email + SMS)**.
+self-hosted Postgres + MinIO · **notifications: Resend (email/OTP) + Brevo (SMS)** —
+free tiers (revised from the original single-Brevo plan; see ACTION_LIST §11.14).
 
 ## 2. Architecture Principles
 - **P1 — Tenant First.** Every table has `tenant_id`; every request is tenant-scoped; isolation enforced at the DB via RLS, not just the app.

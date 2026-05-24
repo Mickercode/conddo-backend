@@ -20,6 +20,7 @@ import java.security.interfaces.RSAPublicKey;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -46,6 +47,12 @@ public class JwtService {
     public static final String CLAIM_TENANT_ID = "tenant_id";
     /** JWT claim carrying the user's role. */
     public static final String CLAIM_ROLE = "role";
+    /** JWT claim carrying the tenant's vertical (Architecture §4.4). */
+    public static final String CLAIM_VERTICAL = "vertical";
+    /** JWT claim carrying the tenant's plan tier (Architecture §4.4). */
+    public static final String CLAIM_PLAN = "plan";
+    /** JWT claim carrying the tenant's active tool ids — drives the frontend manifest/gate (§4.4, §10). */
+    public static final String CLAIM_ACTIVE_MODULES = "activeModules";
 
     private final JwtEncoder encoder;
     private final JwtDecoder decoder;
@@ -76,17 +83,34 @@ public class JwtService {
      * {@code accessTokenTtl} from now (15 minutes in production).
      */
     public String issueAccessToken(UUID userId, UUID tenantId, String role) {
+        return issueAccessToken(userId, tenantId, role, null, null, List.of());
+    }
+
+    /**
+     * Mints an access token carrying the tenant context the frontend needs to
+     * drive manifest navigation and module gating (Architecture §4.4): the
+     * tenant's {@code vertical}, {@code plan}, and {@code activeModules} (the
+     * resolved tool ids), alongside {@code sub}/{@code tenant_id}/{@code role}.
+     */
+    public String issueAccessToken(UUID userId, UUID tenantId, String role,
+                                   String vertical, String plan, List<String> activeModules) {
         Instant now = clock.instant();
-        JwtClaimsSet claims = JwtClaimsSet.builder()
+        JwtClaimsSet.Builder claims = JwtClaimsSet.builder()
                 .issuer(issuer)
                 .issuedAt(now)
                 .expiresAt(now.plus(accessTokenTtl))
                 .subject(userId.toString())
                 .claim(CLAIM_TENANT_ID, tenantId.toString())
                 .claim(CLAIM_ROLE, role)
-                .build();
+                .claim(CLAIM_ACTIVE_MODULES, activeModules == null ? List.of() : activeModules);
+        if (vertical != null) {
+            claims.claim(CLAIM_VERTICAL, vertical);
+        }
+        if (plan != null) {
+            claims.claim(CLAIM_PLAN, plan);
+        }
         JwsHeader header = JwsHeader.with(SignatureAlgorithm.RS256).build();
-        return encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
+        return encoder.encode(JwtEncoderParameters.from(header, claims.build())).getTokenValue();
     }
 
     /**
