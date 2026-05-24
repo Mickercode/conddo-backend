@@ -7,6 +7,6 @@ package io.conddo.core.tenant;
 public class TenantContextMissingException extends RuntimeException {
 
     public TenantContextMissingException() {
-        super("No tenant in context. Provide a valid X-Tenant-Id.");
+        super("No tenant in context — the request carries no resolvable tenant.");
     }
 }

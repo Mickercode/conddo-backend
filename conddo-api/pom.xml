@@ -37,6 +37,14 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Security: JWT resource server. Brings spring-boot-starter-security
+             (web + config + method security) transitively, so this is where the
+             auth filter chain + endpoint lockdown is defined (SecurityConfig). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
         <!-- Redis (job queue / cache / pub-sub foundation) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

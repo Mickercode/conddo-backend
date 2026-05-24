@@ -32,8 +32,9 @@ public class TenantController {
 
     @PostMapping
     public ResponseEntity<ApiResponse<TenantResponse>> create(@Valid @RequestBody CreateTenantRequest request) {
-        TenantResponse body = TenantResponse.from(
-                tenantService.create(request.name(), request.slug(), request.verticalId(), request.planId()));
+        TenantResponse body = TenantResponse.from(tenantService.create(
+                request.name(), request.slug(), request.verticalId(), request.planId(),
+                request.adminEmail(), request.adminPassword(), request.adminFullName()));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(body));
     }
 

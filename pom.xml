@@ -34,6 +34,13 @@
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <minio.version>8.5.12</minio.version>
+        <!--
+          Override Spring Boot's managed Testcontainers (1.19.x → docker-java 3.3.6,
+          which defaults to Docker API 1.32). Modern Docker Engines (29.x) require a
+          minimum API ≥ 1.40 and reject 1.32 with HTTP 400. Testcontainers 1.20.x
+          ships docker-java 3.4.x, which negotiates the API version with the daemon.
+        -->
+        <testcontainers.version>1.20.6</testcontainers.version>
     </properties>
 
     <dependencyManagement>
@@ -52,4 +59,25 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!--
+              Pin the Docker Engine API version used by Testcontainers' docker-java
+              client. Modern engines (Docker 24+, and notably 29.x with MinAPIVersion
+              1.40) reject docker-java's legacy default of 1.32 with HTTP 400. 1.43 is
+              supported by Docker 24+, so it is a safe floor for both CI and local dev.
+              Applies to tests only (a surefire fork system property); no runtime impact.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <api.version>1.43</api.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

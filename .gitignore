@@ -15,5 +15,9 @@ target/
 .env
 infra/.env
 
+# JWT signing keys — generated locally / never commit (prod uses env vars).
+# Match *.pem anywhere so a key generated at the repo root can't be committed.
+*.pem
+
 # OS
 .DS_Store

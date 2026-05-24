@@ -1,0 +1,20 @@
+# Build output
+target/
+**/target/
+
+# Never bake secrets into the image — prod supplies JWT keys via CONDDO_JWT_*
+**/resources/keys/*.pem
+.env
+infra/.env
+
+# VCS / CI / IDE / OS
+.git/
+.github/
+.idea/
+*.iml
+.vscode/
+.settings/
+.DS_Store
+
+# Docs aren't needed at runtime
+*.md

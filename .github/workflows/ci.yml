@@ -21,5 +21,16 @@ jobs:
           java-version: "17"
           cache: maven
 
+      - name: Generate dev JWT keys
+        # The RSA signing keys are gitignored; the app needs them on the
+        # classpath to boot during the integration tests. Production supplies
+        # real keys via CONDDO_JWT_* env vars.
+        run: |
+          mkdir -p conddo-api/src/main/resources/keys
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+            -out conddo-api/src/main/resources/keys/dev_private.pem
+          openssl rsa -in conddo-api/src/main/resources/keys/dev_private.pem \
+            -pubout -out conddo-api/src/main/resources/keys/dev_public.pem
+
       - name: Build & test
         run: ./mvnw -B clean verify

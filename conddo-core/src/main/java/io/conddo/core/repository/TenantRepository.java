@@ -11,4 +11,7 @@ public interface TenantRepository extends JpaRepository<Tenant, UUID> {
     boolean existsBySlug(String slug);
 
     Optional<Tenant> findBySlug(String slug);
+
+    /** Resolves a tenant from its self-book link slug (§11.5 public endpoint). */
+    Optional<Tenant> findByBookingLinkSlug(String bookingLinkSlug);
 }

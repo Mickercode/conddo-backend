@@ -35,16 +35,66 @@ spring:
       host: ${CONDDO_REDIS_HOST:localhost}
       port: ${CONDDO_REDIS_PORT:6379}
 
-# MinIO (object storage)
 conddo:
+  # MinIO (object storage)
   minio:
     endpoint: ${CONDDO_MINIO_ENDPOINT:http://localhost:9000}
     access-key: ${CONDDO_MINIO_USER:conddo}
     secret-key: ${CONDDO_MINIO_PASSWORD:conddo_secret_change_me}
     bucket: ${CONDDO_MINIO_BUCKET:conddo}
 
+  # Notification channels (PRD §6.4). provider 'log' = stub (the default); set
+  # 'termii' / 'resend' + credentials to deliver for real.
+  notifications:
+    sms:
+      provider: ${CONDDO_SMS_PROVIDER:log}
+      base-url: ${CONDDO_TERMII_BASE_URL:https://api.ng.termii.com}
+      api-key: ${CONDDO_TERMII_API_KEY:}
+      sender-id: ${CONDDO_TERMII_SENDER_ID:Conddo}
+    email:
+      provider: ${CONDDO_EMAIL_PROVIDER:log}
+      base-url: ${CONDDO_RESEND_BASE_URL:https://api.resend.com}
+      api-key: ${CONDDO_RESEND_API_KEY:}
+      from: ${CONDDO_EMAIL_FROM:no-reply@conddo.io}
+
+  security:
+    # Access-token signing (RSA-256). Local default = generated dev key pair on
+    # the classpath (conddo-api/src/main/resources/keys, gitignored). Production
+    # overrides CONDDO_JWT_* to point at mounted key files.
+    jwt:
+      public-key: ${CONDDO_JWT_PUBLIC_KEY:classpath:keys/dev_public.pem}
+      private-key: ${CONDDO_JWT_PRIVATE_KEY:classpath:keys/dev_private.pem}
+      issuer: ${CONDDO_JWT_ISSUER:https://conddo.io}
+      access-ttl: ${CONDDO_JWT_ACCESS_TTL:15m}
+    # Authentication tunables (refresh-token lifetime, lockout, cookie flags).
+    auth:
+      refresh-token-ttl: ${CONDDO_REFRESH_TTL:30d}
+      lockout-threshold: ${CONDDO_LOCKOUT_THRESHOLD:5}
+      lockout-base-duration: ${CONDDO_LOCKOUT_BASE:15m}
+      cookie-secure: ${CONDDO_AUTH_COOKIE_SECURE:true}
+      # Strict for same-site (e.g. app.conddo.io + api.conddo.io). For a
+      # cross-site frontend (Vercel) calling a different-domain API, set None
+      # (with cookie-secure true) so the browser sends the refresh cookie.
+      cookie-same-site: ${CONDDO_AUTH_COOKIE_SAMESITE:Strict}
+      password-reset-ttl: ${CONDDO_PWD_RESET_TTL:1h}
+
+    # Browser origins allowed to call the API (comma-separated). Must be explicit
+    # origins (not "*") because credentials are allowed for the refresh cookie.
+    cors:
+      allowed-origins: ${CONDDO_CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
+    # Signup phone-verification OTP. A 4-digit code is low entropy, so the
+    # attempt/expiry/resend limits are the real defence.
+    otp:
+      code-length: ${CONDDO_OTP_LENGTH:4}
+      ttl: ${CONDDO_OTP_TTL:10m}
+      max-attempts: ${CONDDO_OTP_MAX_ATTEMPTS:5}
+      resend-cooldown: ${CONDDO_OTP_RESEND_COOLDOWN:30s}
+      max-resends: ${CONDDO_OTP_MAX_RESENDS:5}
+
 server:
-  port: ${CONDDO_API_PORT:8080}
+  # Honour the platform-provided PORT (Render/Heroku) first, then our own var.
+  port: ${PORT:${CONDDO_API_PORT:8080}}
 
 management:
   endpoints:
@@ -54,3 +104,8 @@ management:
   endpoint:
     health:
       show-components: always
+  health:
+    # Disable until Redis is provisioned (Phase 1 item 2) so /actuator/health
+    # is not marked DOWN on a Redis-less deploy. Re-enable by setting true.
+    redis:
+      enabled: ${CONDDO_REDIS_HEALTH_ENABLED:true}

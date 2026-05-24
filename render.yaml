@@ -1,0 +1,56 @@
+# Render Blueprint — a STARTING POINT for the conddo-api deploy.
+# See DEPLOY.md for the full runbook; some steps can't be automated here and
+# must be done in the dashboard:
+#   - creating the non-owner `app_user` role (db/bootstrap/create-app-user.sql),
+#   - uploading the JWT keys as Secret Files (mounted at /etc/secrets/),
+#   - setting the JDBC URL + DB owner credentials (sync:false vars below).
+services:
+  - type: web
+    name: conddo-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter            # JVM needs RAM; the free tier cold-starts and is tight
+    region: frankfurt        # closest of Render's regions to Nigeria
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+    envVars:
+      # --- Database (two-role model) ---
+      # JDBC URL of the managed DB, e.g. jdbc:postgresql://HOST:5432/DBNAME
+      - key: CONDDO_DB_URL
+        sync: false
+      # Owner/admin role (from the Render database page) — Flyway migrates as this.
+      - key: CONDDO_DB_OWNER
+        sync: false
+      - key: CONDDO_DB_OWNER_PASSWORD
+        sync: false
+      # Non-owner runtime role created by db/bootstrap/create-app-user.sql.
+      - key: CONDDO_DB_APP_USER
+        value: app_user
+      - key: CONDDO_DB_APP_PASSWORD
+        sync: false
+      # --- JWT signing (upload these as Secret Files in the dashboard) ---
+      - key: CONDDO_JWT_PRIVATE_KEY
+        value: file:/etc/secrets/jwt_private.pem
+      - key: CONDDO_JWT_PUBLIC_KEY
+        value: file:/etc/secrets/jwt_public.pem
+      - key: CONDDO_JWT_ISSUER
+        value: https://api.conddo.io
+      # --- Frontend integration ---
+      # Comma-separated browser origins, e.g. https://app.conddo.io
+      - key: CONDDO_CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CONDDO_AUTH_COOKIE_SECURE
+        value: "true"
+      # Strict if API + frontend share a registrable domain (api/app.conddo.io);
+      # None for a cross-site frontend on a different domain.
+      - key: CONDDO_AUTH_COOKIE_SAMESITE
+        value: Strict
+      # Redis isn't provisioned yet (Phase 1 item 2) — keep its health check off.
+      - key: CONDDO_REDIS_HEALTH_ENABLED
+        value: "false"
+
+databases:
+  - name: conddo-postgres
+    plan: basic-256mb        # or `free` to start; size up later
+    region: frankfurt
+    postgresMajorVersion: "16"
