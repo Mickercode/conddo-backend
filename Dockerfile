@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ----------------------------- build stage -----------------------------
 # Builds the runnable conddo-api jar. Tests are NOT run here (they need a
 # Docker daemon for Testcontainers); CI runs them on every push.
