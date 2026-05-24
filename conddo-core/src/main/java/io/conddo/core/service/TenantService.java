@@ -2,6 +2,7 @@ package io.conddo.core.service;
 
 import io.conddo.core.auth.PasswordHasher;
 import io.conddo.core.auth.Role;
+import io.conddo.core.common.Slugs;
 import io.conddo.core.domain.Tenant;
 import io.conddo.core.domain.User;
 import io.conddo.core.repository.TenantRepository;
@@ -48,15 +49,24 @@ public class TenantService {
             throw new IllegalArgumentException("A tenant with slug '" + slug + "' already exists");
         }
         Tenant tenant = tenantRepository.save(new Tenant(name, slug, verticalId, planId));
-
-        // Bind the just-created tenant so the RLS-protected user insert is allowed.
-        TenantContext.set(tenant.getId());
-        tenantSession.bind();
-        userRepository.save(new User(
-                tenant.getId(), adminEmail, passwordHasher.hash(adminPassword),
-                adminFullName, Role.TENANT_ADMIN.name(), null));
-
+        persistAdmin(tenant, adminEmail, passwordHasher.hash(adminPassword), adminFullName, null, false);
         return tenant;
+    }
+
+    /**
+     * Creates a tenant + its admin from a completed (phone-verified) signup:
+     * auto-generates a unique slug from the business name, reuses the already-
+     * hashed password, and marks the admin's phone verified. Returns both so the
+     * caller can issue tokens.
+     */
+    @Transactional
+    public Provisioned provisionFromRegistration(String businessName, String verticalId, String planId,
+                                                 String adminEmail, String adminPasswordHash,
+                                                 String adminFullName, String adminPhone) {
+        Tenant tenant = tenantRepository.save(
+                new Tenant(businessName, uniqueSlug(businessName), verticalId, planId));
+        User admin = persistAdmin(tenant, adminEmail, adminPasswordHash, adminFullName, adminPhone, true);
+        return new Provisioned(tenant, admin);
     }
 
     /** Cross-tenant listing is a platform-staff concern (PRD §6.2). */
@@ -64,5 +74,36 @@ public class TenantService {
     @Transactional(readOnly = true)
     public List<Tenant> findAll() {
         return tenantRepository.findAll();
+    }
+
+    /**
+     * Inserts the tenant's admin. {@code users} is RLS-scoped, so we bind the
+     * just-created tenant to the transaction first — the row's tenant_id then
+     * satisfies the {@code tenant_isolation} WITH CHECK clause.
+     */
+    private User persistAdmin(Tenant tenant, String email, String passwordHash,
+                              String fullName, String phone, boolean phoneVerified) {
+        TenantContext.set(tenant.getId());
+        tenantSession.bind();
+        User admin = new User(tenant.getId(), email, passwordHash, fullName, Role.TENANT_ADMIN.name(), phone);
+        if (phoneVerified) {
+            admin.markPhoneVerified();
+        }
+        return userRepository.save(admin);
+    }
+
+    /** Slugifies the business name and de-duplicates with a numeric suffix. */
+    private String uniqueSlug(String businessName) {
+        String base = Slugs.from(businessName);
+        String slug = base;
+        int suffix = 2;
+        while (tenantRepository.existsBySlug(slug)) {
+            slug = base + "-" + suffix++;
+        }
+        return slug;
+    }
+
+    /** A newly provisioned tenant together with its admin user. */
+    public record Provisioned(Tenant tenant, User admin) {
     }
 }

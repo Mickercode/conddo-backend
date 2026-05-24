@@ -2,8 +2,12 @@ package io.conddo.api.web;
 
 import io.conddo.core.auth.AccountLockedException;
 import io.conddo.core.auth.InvalidCredentialsException;
+import io.conddo.core.auth.InvalidOtpException;
 import io.conddo.core.auth.InvalidPasswordResetTokenException;
 import io.conddo.core.auth.InvalidRefreshTokenException;
+import io.conddo.core.auth.OtpThrottledException;
+import io.conddo.core.auth.PhoneNotVerifiedException;
+import io.conddo.core.auth.RegistrationNotFoundException;
 import io.conddo.core.common.ApiError;
 import io.conddo.core.common.ApiResponse;
 import io.conddo.core.tenant.TenantContextMissingException;
@@ -59,6 +63,30 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleInvalidResetToken(InvalidPasswordResetTokenException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.fail(ApiError.of("AUTH_INVALID_RESET_TOKEN", ex.getMessage())));
+    }
+
+    @ExceptionHandler(InvalidOtpException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidOtp(InvalidOtpException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(ApiError.of("AUTH_INVALID_OTP", ex.getMessage())));
+    }
+
+    @ExceptionHandler(OtpThrottledException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOtpThrottled(OtpThrottledException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(ApiResponse.fail(ApiError.of("AUTH_OTP_THROTTLED", ex.getMessage())));
+    }
+
+    @ExceptionHandler(RegistrationNotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleRegistrationNotFound(RegistrationNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.fail(ApiError.of("AUTH_REGISTRATION_NOT_FOUND", ex.getMessage())));
+    }
+
+    @ExceptionHandler(PhoneNotVerifiedException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePhoneNotVerified(PhoneNotVerifiedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("AUTH_PHONE_NOT_VERIFIED", ex.getMessage())));
     }
 
     /**

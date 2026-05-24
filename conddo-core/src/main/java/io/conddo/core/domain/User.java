@@ -49,6 +49,9 @@ public class User implements LockableAccount {
     @Column(name = "is_active", nullable = false)
     private boolean active = true;
 
+    @Column(name = "phone_verified", nullable = false)
+    private boolean phoneVerified = false;
+
     @Column(name = "last_login_at")
     private OffsetDateTime lastLoginAt;
 
@@ -99,6 +102,10 @@ public class User implements LockableAccount {
         this.passwordHash = newPasswordHash;
     }
 
+    public void markPhoneVerified() {
+        this.phoneVerified = true;
+    }
+
     public UUID getId() {
         return id;
     }
@@ -129,6 +136,10 @@ public class User implements LockableAccount {
 
     public boolean isActive() {
         return active;
+    }
+
+    public boolean isPhoneVerified() {
+        return phoneVerified;
     }
 
     public OffsetDateTime getLastLoginAt() {

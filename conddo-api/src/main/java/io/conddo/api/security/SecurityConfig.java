@@ -3,6 +3,7 @@ package io.conddo.api.security;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.conddo.core.auth.AuthProperties;
 import io.conddo.core.auth.JwtService;
+import io.conddo.core.auth.OtpProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,7 +41,7 @@ import java.util.List;
  */
 @Configuration
 @EnableMethodSecurity
-@EnableConfigurationProperties({AuthProperties.class, CorsProperties.class})
+@EnableConfigurationProperties({AuthProperties.class, CorsProperties.class, OtpProperties.class})
 public class SecurityConfig {
 
     @Bean

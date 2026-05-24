@@ -69,6 +69,15 @@ conddo:
     cors:
       allowed-origins: ${CONDDO_CORS_ALLOWED_ORIGINS:http://localhost:3000}
 
+    # Signup phone-verification OTP. A 4-digit code is low entropy, so the
+    # attempt/expiry/resend limits are the real defence.
+    otp:
+      code-length: ${CONDDO_OTP_LENGTH:4}
+      ttl: ${CONDDO_OTP_TTL:10m}
+      max-attempts: ${CONDDO_OTP_MAX_ATTEMPTS:5}
+      resend-cooldown: ${CONDDO_OTP_RESEND_COOLDOWN:30s}
+      max-resends: ${CONDDO_OTP_MAX_RESENDS:5}
+
 server:
   # Honour the platform-provided PORT (Render/Heroku) first, then our own var.
   port: ${PORT:${CONDDO_API_PORT:8080}}

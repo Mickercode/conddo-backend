@@ -6,6 +6,7 @@ import io.conddo.api.security.JwtTenantContextFilter;
 import io.conddo.api.security.RefreshCookies;
 import io.conddo.core.auth.PasswordHasher;
 import io.conddo.core.notify.NotificationPort;
+import io.conddo.core.notify.SmsSender;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
@@ -91,6 +93,8 @@ class AuthFlowTest {
     private ObjectMapper objectMapper;
     @MockBean
     private NotificationPort notificationPort;
+    @MockBean
+    private SmsSender smsSender;
 
     /**
      * Seeds a SUPER_ADMIN into the internal {@code staff_users} table (no tenant),
@@ -260,6 +264,60 @@ class AuthFlowTest {
     }
 
     @Test
+    void stagedSignupVerifiesPhoneThenCreatesTenantAndLogsIn() throws Exception {
+        String phone = "+2348030000001";
+        String regId = registerStart("Amaka", phone, "amaka@biz.test");
+
+        // Verify with the code the (stubbed) SMS "sent".
+        mockMvc.perform(post("/auth/register/verify").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("registrationId", regId, "code", capturedOtp(phone)))))
+                .andExpect(status().isOk());
+
+        // Complete -> tenant + admin created, logged in. Slug auto-derived from name.
+        MvcResult complete = mockMvc.perform(post("/auth/register/complete").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("registrationId", regId, "businessName", "Amaka Styles",
+                                "businessType", "fashion", "planId", "starter"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.data.role").value("TENANT_ADMIN"))
+                .andReturn();
+        String token = objectMapper.readTree(complete.getResponse().getContentAsString())
+                .path("data").path("accessToken").asText();
+
+        // The new account works against its own (empty) tenant-scoped CRM,
+        mockMvc.perform(get("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+        // and can log in normally using the auto-generated slug "amaka-styles".
+        mockMvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("tenantSlug", "amaka-styles", "email", "amaka@biz.test", "password", PASSWORD))))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void wrongOtpIsRejected() throws Exception {
+        String phone = "+2348030000002";
+        String regId = registerStart("Bola", phone, "bola@biz.test");
+        String wrong = capturedOtp(phone).equals("0000") ? "1111" : "0000";
+
+        mockMvc.perform(post("/auth/register/verify").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("registrationId", regId, "code", wrong))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("AUTH_INVALID_OTP"));
+    }
+
+    @Test
+    void completingSignupBeforeVerifyingIsRejected() throws Exception {
+        String regId = registerStart("Chidi", "+2348030000003", "chidi@biz.test");
+
+        mockMvc.perform(post("/auth/register/complete").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("registrationId", regId, "businessName", "Chidi Foods",
+                                "businessType", "food", "planId", "free"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("AUTH_PHONE_NOT_VERIFIED"));
+    }
+
+    @Test
     void corsPreflightAllowsConfiguredOriginWithCredentials() throws Exception {
         mockMvc.perform(options("/api/v1/customers")
                         .header("Origin", "https://app.conddo.io")
@@ -290,6 +348,26 @@ class AuthFlowTest {
 
     private void signup(String slug, String adminEmail) throws Exception {
         signupReturningId(slug, adminEmail);
+    }
+
+    /** Starts a staged registration and returns its id. */
+    private String registerStart(String fullName, String phone, String email) throws Exception {
+        MvcResult result = mockMvc.perform(post("/auth/register/start").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("fullName", fullName, "phone", phone, "email", email, "password", PASSWORD))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.registrationId").isNotEmpty())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString())
+                .path("data").path("registrationId").asText();
+    }
+
+    /** Extracts the 4-digit code from the (stubbed) SMS sent to a phone. */
+    private String capturedOtp(String phone) {
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(smsSender, atLeastOnce()).send(eq(phone), message.capture());
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d{4}").matcher(message.getValue());
+        assertTrue(matcher.find(), "no OTP code in SMS: " + message.getValue());
+        return matcher.group();
     }
 
     private String signupReturningId(String slug, String adminEmail) throws Exception {
