@@ -238,6 +238,13 @@ This is your roadmap. Each item notes the PRD section and a definition of done.
 Items 8–9 are later phases (newly specified in PRD v1.3); they're captured here
 so the scope and key data model are known — **do not build them yet.**
 
+> 📋 **Per-module dashboard API contract is in §11.** The frontend dashboard
+> module is being built screen-by-screen (Next.js, other repo). §11 audits every
+> dashboard page + functionality and specifies the **REST endpoints each one
+> needs**, so you can build module APIs in parallel with the frontend. The
+> infra items below (auth, notifications, jobs, billing) are prerequisites that
+> several §11 modules depend on.
+
 ### 1. Authentication & authorisation  ✅ DONE (PRD §6.2, §12.1)
 Implemented end-to-end; the Testcontainers `AuthFlowTest` proves it. Key decisions
 and where they live:
@@ -422,3 +429,281 @@ These are unresolved product decisions — flag them, don't silently assume:
 
 When in doubt, read `conddo-api/.../RlsIsolationTest.java` and `V2__rls.sql` — they
 encode the isolation contract precisely.
+
+---
+
+## 11. Dashboard Module — Page & Functionality Audit + API Contract
+
+This is the **frontend → backend contract for the tenant dashboard**. The dashboard
+is the authenticated app a business owner/staff uses day-to-day. The frontend
+(Next.js, separate repo `conddo-app`) is being built screen-by-screen; several
+screens are **already built against hardcoded demo data** and now need real APIs.
+This section audits **every page + functionality** and lists the **endpoints to
+build**. Build these per module; nothing here breaks the §3 RLS contract.
+
+### 11.0 Conventions for everything in this section
+- **Base + envelope:** all endpoints are `/api/v1/...` and return the standard
+  `ApiResponse` envelope (§6). Lists return `meta` (`page`, `size`, `total`).
+- **Tenancy:** every endpoint is **tenant-scoped via the JWT `tenant_id` claim**
+  (RLS, §3) unless explicitly marked **PUBLIC**. New tenant-scoped tables follow
+  the §3 checklist. No manual `WHERE tenant_id`.
+- **Roles:** `TENANT_ADMIN` + `STAFF` may read; writes default to `TENANT_ADMIN`
+  unless noted. Annotate with `@PreAuthorize` (§6).
+- **List params (standard):** `?search=&page=&size=&sort=` plus per-module filters.
+- **Status legend:** ✅ page built (frontend) · ⬜ page not built yet ·
+  🔌 endpoint already exists · 🆕 endpoint to build.
+- **Response shapes:** the frontend's expected field names live in the demo data
+  in the other repo — match them to avoid a mapping layer:
+  `conddo-app/lib/demo/customers.ts`, `conddo-app/lib/demo/orders.ts`, and inline
+  page data in `conddo-app/app/<route>/page.tsx`.
+- **Reference data (build early — drives vertical-aware behaviour):**
+  `GET /api/v1/verticals/{id}/config` 🆕 → the vertical's order-pipeline stages,
+  measurement fields, and website sections. The dashboard's order stages,
+  measurement labels, etc. are **vertical-specific**, not hardcoded.
+- **Shared cross-cutting endpoints** (used by many pages) are in §11.12.
+
+---
+
+### 11.1 Home / Dashboard  — `/dashboard` ✅
+**Functionality:** greeting; setup-progress banner ("2 of 6 steps"); 4 KPI stat
+cards (revenue today, pending orders, new customers, low-stock) each with a delta;
+Recent Orders table; Website Status card; Today's Bookings; "New Order" CTA.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/dashboard/summary` | One call returning all KPI cards `{revenueToday, pendingOrders, newCustomers, lowStockItems}` each `{value, delta, tone}`. |
+|🆕| GET | `/api/v1/dashboard/setup-checklist` | `{steps:[{key,label,done}], completed, total}` for the setup banner. |
+|🆕| POST | `/api/v1/dashboard/setup-checklist/{key}/dismiss` | Mark a setup step done/dismissed. |
+| | GET | `/api/v1/orders?sort=recent&size=4` | Recent Orders widget (reuses §11.4). |
+| | GET | `/api/v1/bookings?date=today` | Today's Bookings widget (reuses §11.5). |
+| | GET | `/api/v1/website/status` | Website Status widget (reuses §11.2). |
+
+### 11.2 Website  — `/website` ⬜
+**Functionality:** live/in-progress status, subdomain + custom domain, traffic
+(visits/enquiries), configured sections (read-only — the site is built in Conddo
+Studio §8), request edits, connect custom domain (PRO). Tenant side is mostly
+**read + request-changes**; the actual build lives in §8.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/website` | Site config: `{subdomain, customDomain, status, publishedAt}`. |
+|🆕| GET | `/api/v1/website/status` | `{state:'live'|'in_progress', domain, visitsToday, enquiries}`. |
+|🆕| GET | `/api/v1/website/sections` | Configured sections + content (read-only snapshot from Studio). |
+|🆕| POST | `/api/v1/website/change-requests` | Owner requests an edit → creates a Studio job/revision. |
+|🆕| POST | `/api/v1/website/domain` | Connect a custom domain (PRO/plan-gated). |
+|🆕| GET | `/api/v1/website/analytics?range=` | Visits, enquiries, top pages over a range. |
+
+### 11.3 Customers (CRM)  — `/customers` ✅ · `/customers/{id}` ✅
+**Functionality:** list with filter tabs (All / New this month / High value /
+Inactive), search, segments, pagination, multi-select + **bulk** (SMS / email /
+add tag / export), add customer, import CSV; **profile**: contact, tag, member-since,
+totals (spent / orders / AOV), internal notes, **measurement profile**, order
+history, payment history, send SMS/email.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🔌| GET | `/api/v1/customers?search=&filter=&segment=&page=&size=` | **Extend existing** with filters/search/pagination + `meta`. Row fields: `{id,name,initials,phone,email,totalSpent,orders,lastActive,tag}`. |
+|🔌| POST | `/api/v1/customers` | Create (exists). |
+|🆕| GET | `/api/v1/customers/{id}` | Profile incl. `totalSpent, orders, avgOrderValue, tag, memberSince`. |
+|🆕| PATCH | `/api/v1/customers/{id}` | Update contact/tag. |
+|🆕| DELETE | `/api/v1/customers/{id}` | Remove. |
+|🆕| GET/PUT | `/api/v1/customers/{id}/notes` | Internal notes (free text). |
+|🆕| GET/PUT | `/api/v1/customers/{id}/measurements` | Measurement profile (fields from vertical config). |
+|🆕| GET | `/api/v1/customers/{id}/orders` | Order history for the profile. |
+|🆕| GET | `/api/v1/customers/{id}/payments` | Payment history for the profile. |
+|🆕| POST / DELETE | `/api/v1/customers/{id}/tags` | Add / remove a tag (VIP, New, Lead…). |
+|🆕| POST | `/api/v1/customers/import` | CSV import (multipart) → returns created/failed counts. |
+|🆕| GET | `/api/v1/customers/export?filter=` | CSV export of the filtered set. |
+|🆕| GET | `/api/v1/customers/segments` | Segment definitions + member counts. |
+|🆕| POST | `/api/v1/customers/bulk/{action}` | `action ∈ {sms,email,tag,export}`; body `{customerIds:[], payload}`. |
+|🆕| POST | `/api/v1/customers/{id}/messages` | Send a single SMS/email (via Notifications §5). |
+
+### 11.4 Orders  — `/orders` (Kanban) ✅ · `/orders/{id}` ✅
+**Functionality:** Kanban pipeline grouped by **stage** with per-column counts;
+filter (All/Today/This week/Overdue), search; **OVERDUE/URGENT** flags; New Order;
+add/rename stage; drag card → change stage. **Detail:** stage stepper + "mark next
+stage", order items table, billing summary (total/deposit/balance), record payment,
+send reminder, measurements, internal notes, activity log, customer link.
+**Stages are vertical-specific** (Fashion default: Received → Measurement Taken →
+Fabric Sourced → In Production → Ready for Fitting → Delivered) — load from vertical
+config, store per-tenant overrides.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/orders/board?filter=&search=` | Kanban: `{stages:[{name,count,orders:[card]}]}`. Card: `{id,customer,service,amount,date,initials,stage,flag}`. |
+|🆕| GET | `/api/v1/orders?filter=&search=&stage=&page=&size=` | Flat list (recent-orders widget, list view). |
+|🆕| POST | `/api/v1/orders` | Create order (customer, items, stage, dueDate). |
+|🆕| GET | `/api/v1/orders/{id}` | Detail: items, billing `{total,deposit,balance}`, measurements, customer, flag. |
+|🆕| PATCH | `/api/v1/orders/{id}` | Update dueDate, flag, fields. |
+|🆕| POST | `/api/v1/orders/{id}/transition` | Move to a stage; appends an activity-log event `{from,to,by,at}`. |
+|🆕| GET / POST / PATCH / DELETE | `/api/v1/orders/stages` | Manage the tenant's pipeline stages. |
+|🆕| GET / POST / PATCH / DELETE | `/api/v1/orders/{id}/items` | Order line items `{description,qty,unitPrice}`. |
+|🆕| GET / POST | `/api/v1/orders/{id}/payments` | List / record payments against the order. |
+|🆕| POST | `/api/v1/orders/{id}/reminders` | Send a payment/pickup reminder. |
+|🆕| GET | `/api/v1/orders/{id}/activity` | Activity log (transitions, messages, payments). |
+|🆕| PUT | `/api/v1/orders/{id}/measurements` | Per-order measurements snapshot. |
+
+### 11.5 Bookings  — `/bookings` ✅
+**Functionality:** Day/Week/Month calendar of appointments; create booking; week
+grid with positioned events; "upcoming this week"; **availability settings**
+(working hours per day), **booking duration**, **buffer time**; **shareable booking
+link** (clients self-book) + copy; weekly performance (count + projected revenue).
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/bookings?from=&to=&view=` | Events in range: `{id,customer,service,start,end,mode,status}`. |
+|🆕| POST | `/api/v1/bookings` | Create a booking. |
+|🆕| GET / PATCH / DELETE | `/api/v1/bookings/{id}` | Read / reschedule / cancel. |
+|🆕| GET | `/api/v1/bookings/upcoming` | Upcoming-this-week list. |
+|🆕| GET / PUT | `/api/v1/bookings/availability` | Working hours per weekday, duration, buffer. |
+|🆕| GET / POST | `/api/v1/bookings/link` | Shareable link config; POST regenerates the slug. |
+|🆕| GET | `/api/v1/bookings/performance?range=week` | `{bookingsThisWeek, revenueProjected}`. |
+|🆕| GET | `/api/v1/public/book/{businessSlug}` | **PUBLIC** client-facing availability for self-booking. Rate-limited. |
+|🆕| POST | `/api/v1/public/book/{businessSlug}` | **PUBLIC** create a booking request. Rate-limited; bot-protected. |
+
+### 11.6 Inventory  — `/inventory` ⬜
+**Functionality:** products/services list, stock levels, **low-stock alerts**
+(feeds the dashboard KPI), categories, add/edit product, adjust stock, SKUs/variants.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/inventory/products?search=&category=&lowStock=&page=&size=` | List. |
+|🆕| POST / GET / PATCH / DELETE | `/api/v1/inventory/products[/{id}]` | CRUD product. |
+|🆕| POST | `/api/v1/inventory/products/{id}/adjust` | Stock adjustment `{delta, reason}`. |
+|🆕| GET | `/api/v1/inventory/low-stock` | Items at/below reorder threshold (dashboard KPI source). |
+|🆕| GET / POST | `/api/v1/inventory/categories` | Manage categories. |
+
+### 11.7 Payments  — `/payments` ✅
+**Functionality:** KPI cards (this month / outstanding / paid invoices / overdue);
+filter (All/Received/Outstanding/Overdue) + date range; transactions table; create
+invoice; payment link; export CSV; **outstanding-by-customer** with "send reminder";
+download receipt. **Depends on Billing/Paystack (§7).**
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/payments/summary?range=` | KPI cards: `{thisMonth, outstanding, paidInvoices, overdue}`. |
+|🆕| GET | `/api/v1/payments/transactions?filter=&from=&to=&page=&size=` | Txn rows: `{date,customer,description,amount,method,status}`. |
+|🆕| GET | `/api/v1/payments/outstanding` | Grouped by customer: `{name,note,amount,tone}` + reminder target. |
+|🆕| POST | `/api/v1/payments/reminders` | Send reminder(s) `{customerId|invoiceId}`. |
+|🆕| GET / POST / PATCH | `/api/v1/invoices[/{id}]` | Create / read / update invoices. |
+|🆕| GET | `/api/v1/invoices/{id}/receipt` | Receipt PDF download. |
+|🆕| POST | `/api/v1/payments/links` | Create a Paystack payment link. |
+|🆕| GET | `/api/v1/payments/export?filter=&from=&to=` | CSV export. |
+|🆕| POST | `/api/v1/webhooks/paystack` | **PUBLIC + signature-verified** payment confirmations → reconcile invoices. |
+
+### 11.8 Marketing  — `/marketing` ✅ · `/marketing/social` ✅ · tabs Ads/Email/SMS/Leads ⬜
+**Functionality (Overview):** KPI cards (social reach, post engagement, new leads,
+email open rate, ad spend); Upcoming Posts; Active Campaigns (email + SMS) with
+stats; **Leads funnel** (New→Contacted→Interested→Converted) + conversion rate;
+Quick Actions. **(Social Calendar):** month grid of scheduled posts by platform,
+platform filter, schedule/edit/delete/post-now. **Future tabs:** Ads (Meta), Email,
+SMS, Leads pipeline. Ties into §5 Notifications and §9 AI item 6 (copy assistant).
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/marketing/summary` | Overview KPI cards + deltas. |
+|🆕| GET | `/api/v1/marketing/posts?from=&to=&platform=` | Social calendar + upcoming posts. Post: `{id,title,platform,scheduledAt,status}`. |
+|🆕| POST / GET / PATCH / DELETE | `/api/v1/marketing/posts[/{id}]` | Schedule/edit/delete a post `{platforms[],content,mediaIds,scheduledAt}`. |
+|🆕| POST | `/api/v1/marketing/posts/{id}/publish` | "Post now". |
+|🆕| GET / POST | `/api/v1/marketing/campaigns?type=email\|sms&status=` | List / create campaigns. |
+|🆕| GET | `/api/v1/marketing/campaigns/{id}` | Stats: `{sent,openRate,delivered,clickRate,status}`. |
+|🆕| GET | `/api/v1/marketing/leads/funnel` | Funnel counts per stage + conversion rate. |
+|🆕| GET / PATCH | `/api/v1/marketing/leads[/{id}]` | Leads list / move stage. |
+|🆕| GET / POST / DELETE | `/api/v1/marketing/connections` | Connected social accounts (IG/FB/X/LinkedIn OAuth). |
+|🆕| GET / POST | `/api/v1/marketing/ads` | Meta ad campaigns (later — see §9 open question on Meta rate limits). |
+|🆕| POST | `/api/v1/marketing/assistant/generate` | AI copy (caption/email/SMS/ad) — **§9 AI item 6**; human-in-the-loop. |
+
+### 11.9 Analytics  — `/analytics` ⬜
+**Functionality:** business analytics — revenue trends, orders over time, customer
+growth/retention, top services/products, website traffic, conversion; date range +
+export. Largely **read-only aggregation** over orders/payments/customers/website.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/analytics/overview?range=` | Headline metrics. |
+|🆕| GET | `/api/v1/analytics/revenue?range=&granularity=` | Revenue time series. |
+|🆕| GET | `/api/v1/analytics/orders?range=` | Orders/volume time series. |
+|🆕| GET | `/api/v1/analytics/customers?range=` | New vs returning, retention. |
+|🆕| GET | `/api/v1/analytics/top?metric=services\|products\|customers` | Leaderboards. |
+|🆕| GET | `/api/v1/analytics/traffic?range=` | Website traffic/conversion. |
+|🆕| GET | `/api/v1/analytics/export?report=&range=` | CSV/PDF export. |
+
+### 11.10 Staff  — `/staff` ⬜
+**Functionality:** staff list, invite staff (email + role), roles/permissions,
+edit role, deactivate, resend invite, per-user activity. **Maps to the existing
+`users` table** (RLS-scoped, `Role` = TENANT_ADMIN/STAFF). `TENANT_ADMIN` only.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET | `/api/v1/staff` | List tenant users (TENANT_ADMIN/STAFF) `{name,email,role,status,lastActive}`. |
+|🆕| POST | `/api/v1/staff/invite` | Invite `{email,role}` → sends invite (Notifications §5). |
+|🆕| GET / PATCH | `/api/v1/staff/{id}` | Read / change role or status (activate/deactivate). |
+|🆕| POST | `/api/v1/staff/{id}/resend-invite` | Resend the invite email. |
+|🆕| GET | `/api/v1/staff/roles` | Role definitions + permission matrix. |
+|🆕| GET | `/api/v1/staff/{id}/activity` | Recent actions (from `audit_log` §3). |
+
+### 11.11 Settings  — `/settings` ✅ (Business Profile)
+**Functionality (built):** Business Details (name, tagline, description, **industry
+locked**, email, phone, **subdomain locked**, connect domain PRO), Branding (logo,
+primary brand colour), Social Handles, Location, Business Hours.
+**Sub-sections still to build (⬜):** Subscription & Billing, Notifications,
+Connected Accounts, Staff & Permissions (→ §11.10), API Keys, Danger Zone.
+
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET / PUT | `/api/v1/settings/business-profile` | Name, tagline, description, email, phone (industry + subdomain read-only). |
+|🆕| PUT | `/api/v1/settings/branding` | `{primaryColor}` + logo via media upload (§11.12). |
+|🆕| PUT | `/api/v1/settings/social-handles` | IG / X / Facebook / LinkedIn. |
+|🆕| PUT | `/api/v1/settings/location` | Street, city, state. |
+|🆕| GET / PUT | `/api/v1/settings/business-hours` | Per-weekday on/off + open/close times. |
+|🆕| GET / PUT | `/api/v1/settings/notifications` | Notification channel preferences. |
+|🆕| GET / POST / DELETE | `/api/v1/settings/api-keys` | List / create / revoke API keys. |
+|🆕| GET | `/api/v1/billing/subscription` | Current plan, status, renewal, trial (→ §7). |
+|🆕| POST | `/api/v1/billing/change-plan` | Upgrade/downgrade tier (→ §7 Paystack). |
+|🆕| GET | `/api/v1/billing/invoices` | Subscription invoice history. |
+|🆕| POST | `/api/v1/settings/danger/deactivate` | Deactivate tenant (confirmation-gated). |
+|🆕| DELETE | `/api/v1/tenant` | Delete tenant (Danger Zone; hard-gated, owner/SUPER_ADMIN). |
+
+### 11.12 Cross-cutting (shared by many pages)
+| | Method | Endpoint | Purpose |
+|---|---|---|---|
+|🆕| GET / POST | `/api/v1/media` | Upload to MinIO (multipart) → `{mediaId,url}`. Used by branding, posts, products, order photos. |
+|🆕| GET | `/api/v1/notifications?unread=` | Topbar bell feed. |
+|🆕| POST | `/api/v1/notifications/{id}/read` · `/notifications/read-all` | Mark read. |
+|🆕| GET | `/api/v1/search?q=` | Global topbar search across customers/orders/bookings. |
+|🆕| GET | `/api/v1/verticals/{id}/config` | Vertical config: order stages, measurement fields, website sections (drives §11.3–11.5). |
+|🆕| GET | `/api/v1/me` | Current user + tenant summary (for the sidebar identity: business name, user name/role, initials, subdomain). |
+
+### 11.13 Suggested backend build order
+Dependencies first, then highest-leverage modules:
+1. **Prereqs:** §7 items 5 (Notifications) + 7 (Billing) unblock Customers-messaging,
+   Payments, Staff-invite, Marketing.
+2. **`/me` + `/verticals/{id}/config`** (§11.12) — the dashboard shell and every
+   vertical-aware screen need these first.
+3. **Customers** (§11.3) — extend the existing CRUD; most other modules reference a customer.
+4. **Orders** (§11.4) — board + detail + payments-on-order; core operational loop.
+5. **Dashboard summary** (§11.1) — aggregates Orders/Customers/Bookings/Website.
+6. **Bookings** (§11.5), **Payments/Invoices** (§11.7), **Inventory** (§11.6).
+7. **Settings** (§11.11) + **Staff** (§11.10).
+8. **Marketing** (§11.8), **Analytics** (§11.9), **Website** (§11.2) — the last two
+   lean on Conddo Studio (§8) and aggregation.
+
+> **Frontend status note (updated):** **every dashboard screen in §11.1–11.12 now
+> exists** in `conddo-app`, including a typed **API client that already consumes
+> these exact endpoints** (`conddo-app/lib/api/client.ts` → `/api/v1/...`, standard
+> envelope, Bearer token, `meta` pagination). Two groups:
+> - **Newly built screens are fully API-driven** (Website, Inventory, Analytics,
+>   Staff, all Settings sub-tabs, all Marketing tabs). They call the endpoints via
+>   `useApiQuery` and render loading → error → **empty** → data states. With no
+>   backend wired (`NEXT_PUBLIC_API_URL` unset) they show designed empty states; the
+>   moment the endpoints return data in the documented shape, they populate — **no
+>   adapter layer**.
+> - **Earlier screens still render demo data** (`conddo-app/lib/demo/*`,
+>   Dashboard/Customers/Orders/Bookings/Payments/Marketing-overview/Social). These
+>   get migrated onto the same client once their endpoints land; their demo files
+>   already document the exact field names you should return.
+>
+> **So: match the field names in §11 + the demo files, return the standard envelope,
+> and screens light up with zero frontend changes.** Auth: the client sends
+> `Authorization: Bearer <token>` from `localStorage` (`conddo_access_token`); a
+> login screen will populate it against §7.1.

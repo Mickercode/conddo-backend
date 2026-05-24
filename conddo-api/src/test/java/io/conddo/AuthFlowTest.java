@@ -353,6 +353,31 @@ class AuthFlowTest {
     }
 
     @Test
+    void meAndVerticalConfigPowerTheDashboardShell() throws Exception {
+        signup("dash-a", "owner@dash.test");
+        String token = login("dash-a", "owner@dash.test", PASSWORD);
+
+        mockMvc.perform(get("/api/v1/me").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tenant.slug").value("dash-a"))
+                .andExpect(jsonPath("$.data.tenant.subdomain").value("dash-a"))
+                .andExpect(jsonPath("$.data.user.email").value("owner@dash.test"))
+                .andExpect(jsonPath("$.data.user.role").value("TENANT_ADMIN"));
+
+        mockMvc.perform(get("/api/v1/verticals/fashion/config").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.orderStages[0]").value("Received"))
+                .andExpect(jsonPath("$.data.measurementFields[0].key").value("chest"));
+
+        mockMvc.perform(get("/api/v1/verticals/nope/config").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+
+        // /me requires authentication.
+        mockMvc.perform(get("/api/v1/me")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void corsPreflightAllowsConfiguredOriginWithCredentials() throws Exception {
         mockMvc.perform(options("/api/v1/customers")
                         .header("Origin", "https://app.conddo.io")

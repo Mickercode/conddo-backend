@@ -10,6 +10,7 @@ import io.conddo.core.auth.PhoneNotVerifiedException;
 import io.conddo.core.auth.RegistrationNotFoundException;
 import io.conddo.core.common.ApiError;
 import io.conddo.core.common.ApiResponse;
+import io.conddo.core.common.NotFoundException;
 import io.conddo.core.tenant.TenantContextMissingException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
@@ -33,6 +34,12 @@ public class GlobalExceptionHandler {
                 .toList();
         ApiError error = ApiError.of("VALIDATION_ERROR", "Request validation failed", details);
         return ResponseEntity.badRequest().body(ApiResponse.fail(error));
+    }
+
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNotFound(NotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.fail(ApiError.of("NOT_FOUND", ex.getMessage())));
     }
 
     @ExceptionHandler(TenantContextMissingException.class)
