@@ -29,9 +29,12 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.math.BigDecimal;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -486,6 +489,90 @@ class AuthFlowTest {
                 .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
     }
 
+    @Test
+    void orderLifecycleCreateTransitionPayAndLog() throws Exception {
+        String token = signupVerticalAndLogin("ord-a", "owner@ord.test", "fashion");
+        String customerId = createCustomerReturningId(token, "Chidi Benson");
+
+        // Create an order linked to the customer, with one line item (amount derived).
+        String createBody = objectMapper.writeValueAsString(Map.of(
+                "customerId", customerId,
+                "service", "Ankara Two-Piece",
+                "dueDate", "2025-11-14",
+                "items", List.of(Map.of("description", "Ankara Two-Piece", "quantity", 1, "unitPrice", 45000))));
+        MvcResult created = mockMvc.perform(post("/api/v1/orders").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(createBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.stage").value("Received"))     // fashion's first stage
+                .andExpect(jsonPath("$.data.customer.name").value("Chidi Benson"))
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andReturn();
+        JsonNode createdData = objectMapper.readTree(created.getResponse().getContentAsString()).path("data");
+        assertTrue(createdData.path("reference").asText().startsWith("ORD-"), "reference label");
+        assertEquals(0, createdData.path("amount").decimalValue().compareTo(new BigDecimal("45000")), "amount from items");
+        assertEquals(0, createdData.path("billing").path("balance").decimalValue().compareTo(new BigDecimal("45000")), "unpaid balance");
+        String orderId = createdData.path("id").asText();
+
+        // It appears on the Kanban board under "Received".
+        mockMvc.perform(get("/api/v1/orders/board").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.stages[0].name").value("Received"))
+                .andExpect(jsonPath("$.data.stages[0].count").value(1))
+                .andExpect(jsonPath("$.data.stages[0].orders[0].customer").value("Chidi Benson"));
+
+        // Move it forward a stage.
+        mockMvc.perform(post("/api/v1/orders/" + orderId + "/transition").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("stage", "Measurement Taken"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.stage").value("Measurement Taken"));
+
+        // Record a deposit -> balance drops by that amount.
+        mockMvc.perform(post("/api/v1/orders/" + orderId + "/payments").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("amount", 22500, "method", "Bank Transfer"))))
+                .andExpect(status().isCreated());
+        MvcResult afterPay = mockMvc.perform(get("/api/v1/orders/" + orderId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode billing = objectMapper.readTree(afterPay.getResponse().getContentAsString()).path("data").path("billing");
+        assertEquals(0, billing.path("deposit").decimalValue().compareTo(new BigDecimal("22500")), "deposit paid");
+        assertEquals(0, billing.path("balance").decimalValue().compareTo(new BigDecimal("22500")), "remaining balance");
+
+        // The activity log captured create + transition + payment.
+        mockMvc.perform(get("/api/v1/orders/" + orderId + "/activity").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(3));
+
+        // Transition to a stage outside the pipeline is rejected.
+        mockMvc.perform(post("/api/v1/orders/" + orderId + "/transition").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("stage", "Nonexistent"))))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void orderStagesFallBackToVerticalDefaultsThenCustomize() throws Exception {
+        String token = signupVerticalAndLogin("ord-s", "owner@ords.test", "fashion");
+
+        // No overrides yet -> the fashion vertical's six default stages, "Received" first.
+        mockMvc.perform(get("/api/v1/orders/stages").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(6))
+                .andExpect(jsonPath("$.data[0].name").value("Received"));
+
+        // The first edit materialises the defaults and appends the new stage.
+        mockMvc.perform(post("/api/v1/orders/stages").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("name", "Quality Check"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.id").isNotEmpty())
+                .andExpect(jsonPath("$.data.name").value("Quality Check"));
+
+        // Now they are stored rows (with ids), seven in total.
+        mockMvc.perform(get("/api/v1/orders/stages").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(7))
+                .andExpect(jsonPath("$.data[0].id").isNotEmpty());
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private void signup(String slug, String adminEmail) throws Exception {
@@ -542,6 +629,15 @@ class AuthFlowTest {
                 .andExpect(status().isCreated())
                 .andReturn();
         return objectMapper.readTree(result.getResponse().getContentAsString()).path("data").path("id").asText();
+    }
+
+    /** Signs up a tenant on a given vertical (drives the default order pipeline) and logs in. */
+    private String signupVerticalAndLogin(String slug, String email, String verticalId) throws Exception {
+        mockMvc.perform(post("/api/v1/tenants").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", slug + " Business", "slug", slug, "verticalId", verticalId,
+                                "adminEmail", email, "adminPassword", PASSWORD))))
+                .andExpect(status().isCreated());
+        return login(slug, email, PASSWORD);
     }
 
     private MvcResult performLogin(String slug, String email, String password) throws Exception {
