@@ -18,4 +18,7 @@ public interface OrderPaymentRepository extends JpaRepository<OrderPayment, UUID
     @Query("select coalesce(sum(p.amount), 0) from OrderPayment p "
             + "where p.paidAt >= :start and p.paidAt < :end")
     BigDecimal sumAmountBetween(@Param("start") OffsetDateTime start, @Param("end") OffsetDateTime end);
+
+    /** Individual payments in the window, for analytics time-series bucketing (§11.9). */
+    List<OrderPayment> findByPaidAtBetween(OffsetDateTime start, OffsetDateTime end);
 }

@@ -20,4 +20,7 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID>, JpaSp
     /** Customers created in the window (RLS-scoped). Used by the dashboard KPI. */
     @Query("select count(c) from Customer c where c.createdAt >= :start and c.createdAt < :end")
     long countCreatedBetween(@Param("start") OffsetDateTime start, @Param("end") OffsetDateTime end);
+
+    /** Customers created in the window, for the analytics new-customer series (§11.9). */
+    java.util.List<Customer> findByCreatedAtBetween(OffsetDateTime start, OffsetDateTime end);
 }

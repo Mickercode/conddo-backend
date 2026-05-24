@@ -898,6 +898,50 @@ class AuthFlowTest {
                 .andExpect(jsonPath("$.data.status").value("INACTIVE"));
     }
 
+    @Test
+    void analyticsAggregatesOrdersPaymentsAndCustomers() throws Exception {
+        String token = signupVerticalAndLogin("an-a", "owner@an.test", "fashion");
+        String customerId = createCustomerReturningId(token, "Chidi Benson");
+
+        // Two orders for the same service; record a payment on the first.
+        String orderId = createOrder(token, customerId, "Senator Suit", 30000);
+        createOrder(token, customerId, "Senator Suit", 20000);
+        mockMvc.perform(post("/api/v1/orders/" + orderId + "/payments").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("amount", 30000))))
+                .andExpect(status().isCreated());
+
+        // Overview: two orders, one new customer, revenue = the payment.
+        MvcResult overview = mockMvc.perform(get("/api/v1/analytics/overview").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.orders").value(2))
+                .andExpect(jsonPath("$.data.newCustomers").value(1))
+                .andReturn();
+        JsonNode revenue = objectMapper.readTree(overview.getResponse().getContentAsString())
+                .path("data").path("revenue");
+        assertEquals(0, revenue.decimalValue().compareTo(new BigDecimal("30000")), "revenue over the range");
+
+        // Time-series each have a single (today's) bucket.
+        mockMvc.perform(get("/api/v1/analytics/revenue").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1));
+        mockMvc.perform(get("/api/v1/analytics/orders").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1));
+
+        // Leaderboard: the repeated service tops it with a count of 2.
+        mockMvc.perform(get("/api/v1/analytics/top").param("metric", "services").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].label").value("Senator Suit"))
+                .andExpect(jsonPath("$.data[0].value").value(2));
+
+        // Customer analytics.
+        mockMvc.perform(get("/api/v1/analytics/customers").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.newCustomers").value(1))
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private void signup(String slug, String adminEmail) throws Exception {
@@ -1013,6 +1057,18 @@ class AuthFlowTest {
         MvcResult result = mockMvc.perform(post("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(token))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("fullName", fullName))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+    }
+
+    /** Creates an order (no line items, explicit amount) and returns its id. */
+    private String createOrder(String token, String customerId, String service, int amount) throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of(
+                "customerId", customerId, "service", service, "amount", amount));
+        MvcResult result = mockMvc.perform(post("/api/v1/orders").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isCreated())
                 .andReturn();
         return objectMapper.readTree(result.getResponse().getContentAsString())
