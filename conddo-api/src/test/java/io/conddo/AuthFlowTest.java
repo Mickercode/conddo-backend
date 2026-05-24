@@ -988,6 +988,115 @@ class AuthFlowTest {
                 .andExpect(jsonPath("$.data.unread").value(0));
     }
 
+    @Test
+    void marketingPostsAndCampaigns() throws Exception {
+        String token = signupVerticalAndLogin("mkt-a", "owner@mkt.test", "fashion");
+
+        // Schedule a post on two platforms.
+        OffsetDateTime when = OffsetDateTime.now(ZoneOffset.UTC).plusDays(1).withNano(0);
+        MvcResult created = mockMvc.perform(post("/api/v1/marketing/posts").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "title", "Serum launch", "content", "New hydrating serum!",
+                                "platforms", List.of("instagram", "facebook"),
+                                "scheduledAt", when.toString()))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.platform").value("instagram"))
+                .andExpect(jsonPath("$.data.platforms.length()").value(2))
+                .andExpect(jsonPath("$.data.status").value("scheduled"))
+                .andReturn();
+        String postId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+
+        // Lists, and the platform filter excludes posts not targeting that channel.
+        mockMvc.perform(get("/api/v1/marketing/posts").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1));
+        mockMvc.perform(get("/api/v1/marketing/posts").param("platform", "x").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+
+        // Publish it.
+        mockMvc.perform(post("/api/v1/marketing/posts/" + postId + "/publish").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("published"));
+
+        // Create an email campaign — starts as a draft with zero stats.
+        mockMvc.perform(post("/api/v1/marketing/campaigns").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("name", "May Promo", "type", "email", "audienceSize", 1240))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.type").value("email"))
+                .andExpect(jsonPath("$.data.status").value("draft"))
+                .andExpect(jsonPath("$.data.openRate").value(0.0));
+
+        // Filter campaigns by type.
+        mockMvc.perform(get("/api/v1/marketing/campaigns").param("type", "email").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1));
+        mockMvc.perform(get("/api/v1/marketing/campaigns").param("type", "sms").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+
+        // An invalid campaign type is rejected.
+        mockMvc.perform(post("/api/v1/marketing/campaigns").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Bad", "type", "carrier-pigeon"))))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void marketingLeadsFunnelConnectionsAndSummary() throws Exception {
+        String token = signupVerticalAndLogin("mkt-b", "owner@mktb.test", "fashion");
+
+        // Two leads; move one to converted.
+        MvcResult lead = mockMvc.perform(post("/api/v1/marketing/leads").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("name", "Lead One"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.stage").value("new"))
+                .andReturn();
+        String leadId = objectMapper.readTree(lead.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+        mockMvc.perform(post("/api/v1/marketing/leads").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("name", "Lead Two"))))
+                .andExpect(status().isCreated());
+        mockMvc.perform(patch("/api/v1/marketing/leads/" + leadId).header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("stage", "converted"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.stage").value("converted"));
+
+        // Funnel: 4 stages in order, 1 of 2 converted -> 50%.
+        mockMvc.perform(get("/api/v1/marketing/leads/funnel").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.stages.length()").value(4))
+                .andExpect(jsonPath("$.data.stages[0].stage").value("new"))
+                .andExpect(jsonPath("$.data.conversionRate").value(50.0));
+
+        // Filter leads by stage.
+        mockMvc.perform(get("/api/v1/marketing/leads").param("stage", "converted").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1));
+
+        // Connect a social account; re-connecting the same platform updates the handle (idempotent).
+        mockMvc.perform(post("/api/v1/marketing/connections").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("platform", "instagram", "handle", "@glam"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.platform").value("instagram"));
+        mockMvc.perform(post("/api/v1/marketing/connections").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json(Map.of("platform", "instagram", "handle", "@glam2"))))
+                .andExpect(status().isCreated());
+        mockMvc.perform(get("/api/v1/marketing/connections").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].handle").value("@glam2"));
+
+        // Overview summary reflects the lead count.
+        mockMvc.perform(get("/api/v1/marketing/summary").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.newLeads.value").value(2))
+                .andExpect(jsonPath("$.data.emailOpenRate.value").value(0.0));
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private void signup(String slug, String adminEmail) throws Exception {
