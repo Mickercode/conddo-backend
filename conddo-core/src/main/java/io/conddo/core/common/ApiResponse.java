@@ -21,11 +21,15 @@ public record ApiResponse<T>(boolean success, T data, Meta meta, ApiError error)
         return new ApiResponse<>(false, null, null, error);
     }
 
-    /** Pagination / collection metadata. */
+    /** Pagination / collection metadata (§11.0: page, size, total). */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Meta(Integer page, Integer perPage, Long total) {
+    public record Meta(Integer page, Integer size, Long total) {
         public static Meta total(long total) {
             return new Meta(null, null, total);
+        }
+
+        public static Meta page(int page, int size, long total) {
+            return new Meta(page, size, total);
         }
     }
 }

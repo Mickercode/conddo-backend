@@ -39,9 +39,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -135,7 +138,7 @@ class AuthFlowTest {
         mockMvc.perform(get("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(token)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].fullName").value("Alice"));
+                .andExpect(jsonPath("$.data[0].name").value("Alice"));
     }
 
     @Test
@@ -151,11 +154,11 @@ class AuthFlowTest {
         mockMvc.perform(get("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(tokenA)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].fullName").value("Alice-A"));
+                .andExpect(jsonPath("$.data[0].name").value("Alice-A"));
         mockMvc.perform(get("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(tokenB)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].fullName").value("Bob-B"));
+                .andExpect(jsonPath("$.data[0].name").value("Bob-B"));
     }
 
     @Test
@@ -236,7 +239,7 @@ class AuthFlowTest {
                         .header(JwtTenantContextFilter.ACT_AS_TENANT_HEADER, tenantId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].fullName").value("Alice-SA"));
+                .andExpect(jsonPath("$.data[0].name").value("Alice-SA"));
 
         // Staff carry no tenant; without the header there is no tenant selected,
         // so a tenant-scoped call fails closed (must act-as).
@@ -250,7 +253,7 @@ class AuthFlowTest {
                         .header(JwtTenantContextFilter.ACT_AS_TENANT_HEADER, "11111111-1111-1111-1111-111111111111"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].fullName").value("Alice-SA"));
+                .andExpect(jsonPath("$.data[0].name").value("Alice-SA"));
     }
 
     @Test
@@ -404,6 +407,85 @@ class AuthFlowTest {
                 .andExpect(jsonPath("$.error.code").value("AUTH_INVALID_CREDENTIALS"));
     }
 
+    @Test
+    void customerProfileSupportsContactNotesMeasurementsAndTags() throws Exception {
+        signup("crm-a", "owner@crm.test");
+        String token = login("crm-a", "owner@crm.test", PASSWORD);
+        String id = createCustomerReturningId(token, "Amaka Styles");
+
+        // Profile reads back with the list-shape `name` and 0 orders (Orders §11.4 not built).
+        mockMvc.perform(get("/api/v1/customers/" + id).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.name").value("Amaka Styles"))
+                .andExpect(jsonPath("$.data.orders").value(0));
+
+        // PATCH only the sent contact field.
+        mockMvc.perform(patch("/api/v1/customers/" + id).header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("phone", "+2348030000099"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.phone").value("+2348030000099"));
+
+        // Notes round-trip.
+        mockMvc.perform(put("/api/v1/customers/" + id + "/notes").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("notes", "Prefers Ankara"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/customers/" + id + "/notes").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.notes").value("Prefers Ankara"));
+
+        // Measurements round-trip (vertical-specific keys, free-form values).
+        mockMvc.perform(put("/api/v1/customers/" + id + "/measurements").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("measurements", Map.of("chest", 40, "waist", 32)))))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/customers/" + id + "/measurements").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.measurements.chest").value(40));
+
+        // Tag add -> primary tag; remove -> empty.
+        mockMvc.perform(post("/api/v1/customers/" + id + "/tags").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("tag", "VIP"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tag").value("VIP"))
+                .andExpect(jsonPath("$.data.tags[0]").value("VIP"));
+        mockMvc.perform(delete("/api/v1/customers/" + id + "/tags").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .param("tag", "VIP"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tags.length()").value(0));
+    }
+
+    @Test
+    void listSupportsSearchAndSegmentsAndDeleteRemovesACustomer() throws Exception {
+        signup("crm-b", "owner@crmb.test");
+        String token = login("crm-b", "owner@crmb.test", PASSWORD);
+        createCustomer(token, "Ngozi Tailor");
+        String bId = createCustomerReturningId(token, "Bola Fabrics");
+
+        // Search narrows by name (case-insensitive) and reports total in meta.
+        mockMvc.perform(get("/api/v1/customers").param("search", "ngozi")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].name").value("Ngozi Tailor"))
+                .andExpect(jsonPath("$.meta.total").value(1));
+
+        // Segments lead with "all" carrying the full count (2).
+        mockMvc.perform(get("/api/v1/customers/segments").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].key").value("all"))
+                .andExpect(jsonPath("$.data[0].count").value(2));
+
+        // Delete -> 204, then the profile is gone.
+        mockMvc.perform(delete("/api/v1/customers/" + bId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(get("/api/v1/customers/" + bId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private void signup(String slug, String adminEmail) throws Exception {
@@ -502,10 +584,18 @@ class AuthFlowTest {
     }
 
     private void createCustomer(String token, String fullName) throws Exception {
-        mockMvc.perform(post("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(token))
+        createCustomerReturningId(token, fullName);
+    }
+
+    /** Creates a customer and returns the new id from the profile response. */
+    private String createCustomerReturningId(String token, String fullName) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(token))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("fullName", fullName))))
-                .andExpect(status().isCreated());
+                .andExpect(status().isCreated())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString())
+                .path("data").path("id").asText();
     }
 
     private String json(Map<String, String> body) throws Exception {

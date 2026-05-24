@@ -7,9 +7,14 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -39,6 +44,17 @@ public class Customer {
 
     @Column(name = "total_spent", nullable = false)
     private BigDecimal totalSpent = BigDecimal.ZERO;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "tags")
+    private List<String> tags = new ArrayList<>();
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "measurements")
+    private Map<String, Object> measurements;
+
+    @Column(name = "last_active")
+    private OffsetDateTime lastActive;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -83,7 +99,58 @@ public class Customer {
         return totalSpent;
     }
 
+    public List<String> getTags() {
+        return tags;
+    }
+
+    public Map<String, Object> getMeasurements() {
+        return measurements;
+    }
+
+    public OffsetDateTime getLastActive() {
+        return lastActive;
+    }
+
     public OffsetDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    // ----- mutators (PATCH applies only the fields it was given) -------------
+
+    public void rename(String fullName) {
+        if (fullName != null && !fullName.isBlank()) {
+            this.fullName = fullName;
+        }
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
+    }
+
+    public void setPhone(String phone) {
+        this.phone = phone;
+    }
+
+    public void setNotes(String notes) {
+        this.notes = notes;
+    }
+
+    public void setMeasurements(Map<String, Object> measurements) {
+        this.measurements = measurements;
+    }
+
+    public void addTag(String tag) {
+        if (tags == null) {
+            tags = new ArrayList<>();
+        }
+        if (tag != null && !tag.isBlank() && !tags.contains(tag)) {
+            tags.add(tag);
+        }
+    }
+
+    public void removeTag(String tag) {
+        if (tags != null) {
+            tags.remove(tag);
+        }
     }
 }
