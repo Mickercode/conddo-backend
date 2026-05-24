@@ -1,5 +1,6 @@
 package io.conddo.api.security;
 
+import io.conddo.core.audit.AuditContext;
 import io.conddo.core.auth.JwtService;
 import io.conddo.core.tenant.TenantContext;
 import jakarta.servlet.FilterChain;
@@ -51,6 +52,8 @@ public class JwtTenantContextFilter extends OncePerRequestFilter {
                 if (tenantId != null) {
                     TenantContext.set(tenantId);
                 }
+                // The token subject is the user id — record it as the audit actor.
+                AuditContext.setActor(parseUuid(jwtAuth.getToken().getSubject()));
             }
             filterChain.doFilter(request, response);
         } finally {

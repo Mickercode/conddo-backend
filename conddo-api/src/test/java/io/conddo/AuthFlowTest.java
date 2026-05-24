@@ -28,6 +28,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Map;
 
@@ -318,6 +319,38 @@ class AuthFlowTest {
     }
 
     @Test
+    void repeatedFailedLoginsLockTheAccount() throws Exception {
+        signup("lock-a", "owner@lock.test");
+        // 5 wrong-password attempts — each rejected, and (crucially) each must
+        // PERSIST the incremented counter across requests.
+        for (int i = 0; i < 5; i++) {
+            mockMvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                            .content(json(Map.of("tenantSlug", "lock-a", "email", "owner@lock.test", "password", "WRONGpw" + i))))
+                    .andExpect(status().isUnauthorized());
+        }
+        // The account is now locked: even the correct password is refused.
+        mockMvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("tenantSlug", "lock-a", "email", "owner@lock.test", "password", PASSWORD))))
+                .andExpect(status().isLocked())
+                .andExpect(jsonPath("$.error.code").value("AUTH_ACCOUNT_LOCKED"));
+    }
+
+    @Test
+    void sensitiveActionsAreWrittenToAuditLog() throws Exception {
+        String tenantId = signupReturningId("audit-a", "owner@audit.test");
+        String token = login("audit-a", "owner@audit.test", PASSWORD);   // -> LOGIN audit row
+        createCustomer(token, "Audited Alice");                          // -> CUSTOMER_CREATED audit row
+
+        assertTrue(countAudit(tenantId, "LOGIN") >= 1, "expected a LOGIN audit row");
+        assertTrue(countAudit(tenantId, "CUSTOMER_CREATED") >= 1, "expected a CUSTOMER_CREATED audit row");
+        // A failed login is audited too (persists despite the rejection).
+        mockMvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("tenantSlug", "audit-a", "email", "owner@audit.test", "password", "nope"))))
+                .andExpect(status().isUnauthorized());
+        assertTrue(countAudit(tenantId, "LOGIN_FAILED") >= 1, "expected a LOGIN_FAILED audit row");
+    }
+
+    @Test
     void corsPreflightAllowsConfiguredOriginWithCredentials() throws Exception {
         mockMvc.perform(options("/api/v1/customers")
                         .header("Origin", "https://app.conddo.io")
@@ -359,6 +392,21 @@ class AuthFlowTest {
                 .andReturn();
         return objectMapper.readTree(result.getResponse().getContentAsString())
                 .path("data").path("registrationId").asText();
+    }
+
+    /** Counts audit_log rows for a tenant + action, read as the owner (bypasses RLS). */
+    private long countAudit(String tenantId, String action) throws SQLException {
+        try (Connection owner = DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             PreparedStatement ps = owner.prepareStatement(
+                     "SELECT count(*) FROM audit_log WHERE tenant_id = ?::uuid AND action = ?")) {
+            ps.setString(1, tenantId);
+            ps.setString(2, action);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
     }
 
     /** Extracts the 4-digit code from the (stubbed) SMS sent to a phone. */

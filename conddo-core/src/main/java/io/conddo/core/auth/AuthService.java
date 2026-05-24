@@ -1,5 +1,7 @@
 package io.conddo.core.auth;
 
+import io.conddo.core.audit.AuditActions;
+import io.conddo.core.audit.AuditService;
 import io.conddo.core.domain.Tenant;
 import io.conddo.core.domain.User;
 import io.conddo.core.repository.TenantRepository;
@@ -11,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * Authenticates users and issues tokens (PRD §6.2 / §12.1).
@@ -33,6 +37,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
     private final LockoutPolicy lockoutPolicy;
+    private final AuditService auditService;
     private final AuthProperties properties;
     private final Clock clock;
 
@@ -42,7 +47,7 @@ public class AuthService {
     public AuthService(TenantRepository tenantRepository, UserRepository userRepository,
                        TenantSession tenantSession, PasswordHasher passwordHasher, JwtService jwtService,
                        RefreshTokenService refreshTokenService, LockoutPolicy lockoutPolicy,
-                       AuthProperties properties, Clock clock) {
+                       AuditService auditService, AuthProperties properties, Clock clock) {
         this.tenantRepository = tenantRepository;
         this.userRepository = userRepository;
         this.tenantSession = tenantSession;
@@ -50,16 +55,24 @@ public class AuthService {
         this.jwtService = jwtService;
         this.refreshTokenService = refreshTokenService;
         this.lockoutPolicy = lockoutPolicy;
+        this.auditService = auditService;
         this.properties = properties;
         this.clock = clock;
         this.timingEqualiserHash = passwordHasher.hash("timing-equaliser");
     }
 
-    @Transactional
+    /**
+     * {@code noRollbackFor} the auth exceptions is deliberate: on a failed login
+     * we increment {@code failed_login_attempts} (and may set the lockout) and
+     * MUST keep that even though we then throw — otherwise the counter rolls back
+     * and lockout never triggers. (Audit rows persist regardless, via REQUIRES_NEW.)
+     */
+    @Transactional(noRollbackFor = {InvalidCredentialsException.class, AccountLockedException.class})
     public AuthResult login(String tenantSlug, String email, String rawPassword) {
         Tenant tenant = tenantRepository.findBySlug(tenantSlug).orElse(null);
         if (tenant == null) {
             passwordHasher.matches(rawPassword, timingEqualiserHash);
+            recordLoginFailure(null, null, email, "unknown_tenant");
             throw new InvalidCredentialsException();
         }
 
@@ -71,9 +84,11 @@ public class AuthService {
 
         if (user == null) {
             passwordHasher.matches(rawPassword, timingEqualiserHash);
+            recordLoginFailure(tenant.getId(), null, email, "unknown_user");
             throw new InvalidCredentialsException();
         }
         if (user.isLocked(now)) {
+            recordLoginFailure(tenant.getId(), user.getId(), email, "locked");
             throw new AccountLockedException(user.getLockedUntil());
         }
         if (!user.isActive() || !passwordHasher.matches(rawPassword, user.getPasswordHash())) {
@@ -81,6 +96,7 @@ public class AuthService {
                 lockoutPolicy.registerFailedAttempt(user, now);
                 userRepository.save(user);
             }
+            recordLoginFailure(tenant.getId(), user.getId(), email, user.isActive() ? "bad_credentials" : "inactive");
             throw new InvalidCredentialsException();
         }
 
@@ -89,8 +105,14 @@ public class AuthService {
 
         String accessToken = jwtService.issueAccessToken(user.getId(), user.getTenantId(), user.getRole());
         String refreshToken = refreshTokenService.issue(user.getId(), user.getTenantId());
+        auditService.record(AuditActions.LOGIN, "USER", user.getId(), user.getTenantId(), user.getId(), null, null);
         return new AuthResult(accessToken, jwtService.accessTokenTtl(),
                 refreshToken, properties.refreshTokenTtl(), user.getId(), user.getRole());
+    }
+
+    private void recordLoginFailure(UUID tenantId, UUID userId, String email, String reason) {
+        auditService.record(AuditActions.LOGIN_FAILED, "USER", userId, tenantId, userId,
+                null, Map.of("email", email, "reason", reason));
     }
 
     /**

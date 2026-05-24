@@ -1,5 +1,7 @@
 package io.conddo.core.service;
 
+import io.conddo.core.audit.AuditActions;
+import io.conddo.core.audit.AuditService;
 import io.conddo.core.domain.Customer;
 import io.conddo.core.repository.CustomerRepository;
 import io.conddo.core.tenant.TenantContext;
@@ -8,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Tenant-scoped CRM operations. Each method binds the tenant to the
@@ -19,17 +22,22 @@ public class CustomerService {
 
     private final CustomerRepository customerRepository;
     private final TenantSession tenantSession;
+    private final AuditService auditService;
 
-    public CustomerService(CustomerRepository customerRepository, TenantSession tenantSession) {
+    public CustomerService(CustomerRepository customerRepository, TenantSession tenantSession,
+                           AuditService auditService) {
         this.customerRepository = customerRepository;
         this.tenantSession = tenantSession;
+        this.auditService = auditService;
     }
 
     @Transactional
     public Customer create(String fullName, String email, String phone, String notes) {
         tenantSession.bind();
-        Customer customer = new Customer(TenantContext.require(), fullName, email, phone, notes);
-        return customerRepository.save(customer);
+        Customer customer = customerRepository.save(new Customer(TenantContext.require(), fullName, email, phone, notes));
+        auditService.record(AuditActions.CUSTOMER_CREATED, "CUSTOMER", customer.getId(),
+                null, Map.of("fullName", customer.getFullName()));
+        return customer;
     }
 
     @Transactional(readOnly = true)

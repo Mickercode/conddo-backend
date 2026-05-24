@@ -64,6 +64,7 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(errorResponder)
                         .accessDeniedHandler(errorResponder))
+                .addFilterBefore(new AuditContextFilter(), BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(new JwtTenantContextFilter(), BearerTokenAuthenticationFilter.class);
         return http.build();
     }

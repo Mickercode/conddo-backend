@@ -1,5 +1,7 @@
 package io.conddo.core.auth;
 
+import io.conddo.core.audit.AuditActions;
+import io.conddo.core.audit.AuditService;
 import io.conddo.core.domain.PasswordResetToken;
 import io.conddo.core.domain.Tenant;
 import io.conddo.core.domain.User;
@@ -30,6 +32,7 @@ public class PasswordResetService {
     private final PasswordHasher passwordHasher;
     private final RefreshTokenService refreshTokenService;
     private final NotificationPort notificationPort;
+    private final AuditService auditService;
     private final AuthProperties properties;
     private final Clock clock;
 
@@ -37,7 +40,7 @@ public class PasswordResetService {
                                 PasswordResetTokenRepository passwordResetTokenRepository,
                                 TenantSession tenantSession, PasswordHasher passwordHasher,
                                 RefreshTokenService refreshTokenService, NotificationPort notificationPort,
-                                AuthProperties properties, Clock clock) {
+                                AuditService auditService, AuthProperties properties, Clock clock) {
         this.tenantRepository = tenantRepository;
         this.userRepository = userRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
@@ -45,6 +48,7 @@ public class PasswordResetService {
         this.passwordHasher = passwordHasher;
         this.refreshTokenService = refreshTokenService;
         this.notificationPort = notificationPort;
+        this.auditService = auditService;
         this.properties = properties;
         this.clock = clock;
     }
@@ -99,6 +103,8 @@ public class PasswordResetService {
         token.markUsed(now);
         passwordResetTokenRepository.save(token);
         refreshTokenService.revokeAllForUser(user.getId(), "password-reset");
+        auditService.record(AuditActions.PASSWORD_RESET, "USER", user.getId(),
+                token.getTenantId(), user.getId(), null, null);
     }
 
     private PasswordResetToken resolve(String rawToken) {

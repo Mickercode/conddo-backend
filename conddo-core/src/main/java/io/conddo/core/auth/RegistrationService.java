@@ -1,5 +1,7 @@
 package io.conddo.core.auth;
 
+import io.conddo.core.audit.AuditActions;
+import io.conddo.core.audit.AuditService;
 import io.conddo.core.domain.PendingRegistration;
 import io.conddo.core.notify.SmsSender;
 import io.conddo.core.repository.PendingRegistrationRepository;
@@ -10,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -33,6 +36,7 @@ public class RegistrationService {
     private final TenantService tenantService;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
+    private final AuditService auditService;
     private final AuthProperties authProperties;
     private final OtpProperties otp;
     private final Clock clock;
@@ -41,14 +45,15 @@ public class RegistrationService {
 
     public RegistrationService(PendingRegistrationRepository registrations, PasswordHasher passwordHasher,
                                SmsSender smsSender, TenantService tenantService, JwtService jwtService,
-                               RefreshTokenService refreshTokenService, AuthProperties authProperties,
-                               OtpProperties otp, Clock clock) {
+                               RefreshTokenService refreshTokenService, AuditService auditService,
+                               AuthProperties authProperties, OtpProperties otp, Clock clock) {
         this.registrations = registrations;
         this.passwordHasher = passwordHasher;
         this.smsSender = smsSender;
         this.tenantService = tenantService;
         this.jwtService = jwtService;
         this.refreshTokenService = refreshTokenService;
+        this.auditService = auditService;
         this.authProperties = authProperties;
         this.otp = otp;
         this.clock = clock;
@@ -122,6 +127,9 @@ public class RegistrationService {
         registrations.save(registration);
 
         var admin = provisioned.admin();
+        auditService.record(AuditActions.SIGNUP_COMPLETED, "TENANT", provisioned.tenant().getId(),
+                provisioned.tenant().getId(), admin.getId(), null, Map.of("businessName", businessName));
+
         String accessToken = jwtService.issueAccessToken(admin.getId(), admin.getTenantId(), admin.getRole());
         String refreshToken = refreshTokenService.issue(admin.getId(), admin.getTenantId());
         return new AuthResult(accessToken, jwtService.accessTokenTtl(), refreshToken,

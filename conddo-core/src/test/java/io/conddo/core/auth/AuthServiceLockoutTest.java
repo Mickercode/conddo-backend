@@ -51,6 +51,7 @@ class AuthServiceLockoutTest {
     private final TenantSession tenantSession = mock(TenantSession.class);
     private final JwtService jwtService = mock(JwtService.class);
     private final RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+    private final io.conddo.core.audit.AuditService auditService = mock(io.conddo.core.audit.AuditService.class);
 
     private final AuthProperties props =
             new AuthProperties(Duration.ofDays(30), THRESHOLD, BASE_LOCK, true, Duration.ofHours(1), "Strict");
@@ -64,7 +65,7 @@ class AuthServiceLockoutTest {
         when(hasher.hash(anyString())).thenReturn("HASH");
         when(hasher.matches(eq(CORRECT), anyString())).thenReturn(true);
         authService = new AuthService(tenantRepository, userRepository, tenantSession, hasher,
-                jwtService, refreshTokenService, new LockoutPolicy(props), props, clock);
+                jwtService, refreshTokenService, new LockoutPolicy(props), auditService, props, clock);
     }
 
     private User givenUser() {

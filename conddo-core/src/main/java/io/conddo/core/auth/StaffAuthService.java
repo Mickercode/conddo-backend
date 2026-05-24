@@ -38,7 +38,9 @@ public class StaffAuthService {
         this.timingEqualiserHash = passwordHasher.hash("timing-equaliser");
     }
 
-    @Transactional
+    // noRollbackFor — keep the incremented failed-login counter / lockout on a
+    // failed attempt even though we throw (see AuthService.login).
+    @Transactional(noRollbackFor = {InvalidCredentialsException.class, AccountLockedException.class})
     public StaffAuthResult login(String email, String rawPassword) {
         StaffUser staff = staffUserRepository.findByEmail(email).orElse(null);
         OffsetDateTime now = OffsetDateTime.now(clock);
