@@ -26,4 +26,11 @@ public interface OrderPaymentRepository extends JpaRepository<OrderPayment, UUID
     @Query("select p from OrderPayment p where p.orderId in "
             + "(select o.id from Order o where o.customerId = :customerId) order by p.paidAt desc")
     List<OrderPayment> findByCustomerId(@Param("customerId") UUID customerId);
+
+    /** Paid-to-date per order: rows of [orderId, sum(amount)] (RLS-scoped). Drives §11.7 balances. */
+    @Query("select p.orderId, coalesce(sum(p.amount), 0) from OrderPayment p group by p.orderId")
+    List<Object[]> sumByOrder();
+
+    /** Every payment, newest first — the §11.7 transactions ledger (RLS-scoped). */
+    List<OrderPayment> findAllByOrderByPaidAtDesc();
 }

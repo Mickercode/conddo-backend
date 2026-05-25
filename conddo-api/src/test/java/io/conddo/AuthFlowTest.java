@@ -1177,6 +1177,144 @@ class AuthFlowTest {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void paymentsSummaryTransactionsAndOutstanding() throws Exception {
+        String token = signupVerticalAndLogin("pay-co", "owner@pay.test", "fashion");
+
+        // A customer (with a phone, for the reminder), one unpaid order and one fully-paid order.
+        MvcResult cust = mockMvc.perform(post("/api/v1/customers").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("fullName", "Chidi Benson", "phone", "08030001111"))))
+                .andExpect(status().isCreated()).andReturn();
+        String customerId = objectMapper.readTree(cust.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+
+        createOrder(token, customerId, "Senator Suit", 30000);            // unpaid -> outstanding 30000
+        String paidOrder = createOrder(token, customerId, "Gown", 20000); // fully paid below
+        mockMvc.perform(post("/api/v1/orders/" + paidOrder + "/payments").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("amount", 20000, "method", "Transfer"))))
+                .andExpect(status().isCreated());
+
+        // Summary KPIs computed from orders + payments.
+        MvcResult sum = mockMvc.perform(get("/api/v1/payments/summary").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.paidInvoices").value(1))
+                .andReturn();
+        JsonNode data = objectMapper.readTree(sum.getResponse().getContentAsString()).path("data");
+        assertEquals(0, data.path("thisMonth").decimalValue().compareTo(new BigDecimal("20000")), "this month");
+        assertEquals(0, data.path("outstanding").decimalValue().compareTo(new BigDecimal("30000")), "outstanding");
+        assertEquals(0, data.path("overdue").decimalValue().compareTo(BigDecimal.ZERO), "overdue (none due)");
+
+        // Transactions: a received row + an outstanding row; filters narrow each.
+        mockMvc.perform(get("/api/v1/payments/transactions").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.meta.total").value(2));
+        mockMvc.perform(get("/api/v1/payments/transactions").param("filter", "received")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].status").value("received"))
+                .andExpect(jsonPath("$.data[0].method").value("Transfer"));
+        mockMvc.perform(get("/api/v1/payments/transactions").param("filter", "outstanding")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].status").value("outstanding"));
+
+        // Outstanding grouped by customer, with the reminder target.
+        mockMvc.perform(get("/api/v1/payments/outstanding").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].name").value("Chidi Benson"))
+                .andExpect(jsonPath("$.data[0].customerId").value(customerId))
+                .andExpect(jsonPath("$.data[0].tone").value("warning"));
+
+        // Reminder sends an SMS to the customer.
+        mockMvc.perform(post("/api/v1/payments/reminders").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("customerId", customerId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sent").value(true));
+        verify(smsSender, atLeastOnce()).send(eq("08030001111"), anyString());
+    }
+
+    @Test
+    void websiteConfigStatusSectionsAndChangeRequests() throws Exception {
+        String token = signupVerticalAndLogin("web-co", "owner@web.test", "fashion");
+
+        // Site config: subdomain from the slug, not yet published.
+        mockMvc.perform(get("/api/v1/website").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.subdomain").value("web-co"))
+                .andExpect(jsonPath("$.data.status").value("NOT_STARTED"));
+
+        // Status widget resolves the default *.conddo.io domain; in-progress until live.
+        mockMvc.perform(get("/api/v1/website/status").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.state").value("in_progress"))
+                .andExpect(jsonPath("$.data.domain").value("web-co.conddo.io"))
+                .andExpect(jsonPath("$.data.visitsToday").value(0));
+
+        // Sections fall back to the fashion vertical's default layout.
+        mockMvc.perform(get("/api/v1/website/sections").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].type").value("hero"))
+                .andExpect(jsonPath("$.data[0].configured").value(false));
+
+        mockMvc.perform(get("/api/v1/website/analytics").param("range", "7d")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.range").value("7d"))
+                .andExpect(jsonPath("$.data.visits").value(0));
+
+        // Request an edit -> recorded PENDING, then listed.
+        mockMvc.perform(post("/api/v1/website/change-requests").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("area", "hero", "details", "Make my logo bigger"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.details").value("Make my logo bigger"));
+        mockMvc.perform(get("/api/v1/website/change-requests").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1));
+
+        // Connect a custom domain; the status widget then serves it. Bad input is rejected.
+        mockMvc.perform(post("/api/v1/website/domain").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("domain", "shop.example.com"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.customDomain").value("shop.example.com"));
+        mockMvc.perform(get("/api/v1/website/status").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.domain").value("shop.example.com"));
+        mockMvc.perform(post("/api/v1/website/domain").header(HttpHeaders.AUTHORIZATION, bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("domain", "not a domain"))))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void verticalConfigCoversAllSevenVerticals() throws Exception {
+        String token = signupVerticalAndLogin("vert-co", "owner@vert.test", "fashion");
+
+        // Every canonical vertical resolves with non-empty stages.
+        for (String id : List.of("fashion", "pharmacy", "logistics", "retail",
+                "professional-services", "food-and-beverage", "beauty-and-wellness", "general", "default")) {
+            mockMvc.perform(get("/api/v1/verticals/" + id + "/config").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.id").value(id.equals("default") ? "general" : id))
+                    .andExpect(jsonPath("$.data.orderStages.length()").value(org.hamcrest.Matchers.greaterThan(0)));
+        }
+
+        // A couple of vertical-specific shapes (newly added verticals).
+        mockMvc.perform(get("/api/v1/verticals/logistics/config").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(jsonPath("$.data.measurementFields[0].key").value("weight"))
+                .andExpect(jsonPath("$.data.measurementFields[0].unit").value("kg"));
+        mockMvc.perform(get("/api/v1/verticals/food-and-beverage/config").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(jsonPath("$.data.websiteSections", org.hamcrest.Matchers.hasItem("menu")));
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private void signup(String slug, String adminEmail) throws Exception {
