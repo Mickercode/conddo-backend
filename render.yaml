@@ -49,6 +49,35 @@ services:
       - key: CONDDO_REDIS_HEALTH_ENABLED
         value: "false"
 
+  # Internal Conddo Studio / Jobs Board service (Infrastructure §12/§13).
+  # Standalone: own HMAC STUDIO_JWT + own studio/jobs schemas in the SAME managed
+  # Postgres. Connects as an owner-capable role (it creates/owns those schemas).
+  # Point jobs.conddo.io / studio.conddo.io at this service's URL.
+  - type: web
+    name: conddo-studio
+    runtime: docker
+    dockerfilePath: ./Dockerfile.studio
+    plan: starter
+    region: frankfurt
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+    envVars:
+      # Same managed DB as the API; this service owns the studio/jobs schemas.
+      - key: STUDIO_DB_URL
+        sync: false            # jdbc:postgresql://HOST:5432/DBNAME (same as CONDDO_DB_URL)
+      - key: STUDIO_DB_USER
+        sync: false            # owner role (creates schemas)
+      - key: STUDIO_DB_PASSWORD
+        sync: false
+      # Internal-staff HMAC secret — generated once by Render (≥ 32 bytes).
+      - key: STUDIO_JWT_SECRET
+        generateValue: true
+      - key: STUDIO_JWT_ISSUER
+        value: https://jobs.conddo.io
+      # Jobs Board frontend origin(s), e.g. https://jobs.conddo.io
+      - key: STUDIO_CORS_ALLOWED_ORIGINS
+        sync: false
+
 databases:
   - name: conddo-postgres
     plan: basic-256mb        # or `free` to start; size up later
