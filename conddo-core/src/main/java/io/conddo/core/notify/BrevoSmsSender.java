@@ -30,10 +30,10 @@ public class BrevoSmsSender implements SmsSender {
     private final String apiKey;
     private final String senderId;
 
-    public BrevoSmsSender(NotificationProperties properties) {
+    public BrevoSmsSender(NotificationProperties properties, RestClient.Builder restClientBuilder) {
         NotificationProperties.Sms sms = properties.sms();
         String baseUrl = sms.baseUrl() != null ? sms.baseUrl() : DEFAULT_BASE_URL;
-        this.restClient = RestClient.builder().baseUrl(baseUrl).build();
+        this.restClient = restClientBuilder.baseUrl(baseUrl).build();
         this.apiKey = sms.apiKey();
         this.senderId = sms.senderId();
     }

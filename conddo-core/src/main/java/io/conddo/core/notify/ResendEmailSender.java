@@ -29,10 +29,10 @@ public class ResendEmailSender implements EmailSender {
     private final RestClient restClient;
     private final String from;
 
-    public ResendEmailSender(NotificationProperties properties) {
+    public ResendEmailSender(NotificationProperties properties, RestClient.Builder restClientBuilder) {
         NotificationProperties.Email email = properties.email();
         String baseUrl = email.baseUrl() != null ? email.baseUrl() : DEFAULT_BASE_URL;
-        this.restClient = RestClient.builder()
+        this.restClient = restClientBuilder
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + email.apiKey())
                 .build();
