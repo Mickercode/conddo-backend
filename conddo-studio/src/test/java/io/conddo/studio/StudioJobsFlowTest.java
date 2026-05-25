@@ -2,6 +2,7 @@ package io.conddo.studio;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.conddo.studio.auth.StudioServiceTokenFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,6 +58,7 @@ class StudioJobsFlowTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("studio.jwt.secret", () -> "test-studio-secret-at-least-32-bytes-long-0123456789");
         registry.add("studio.cors.allowed-origins", () -> "http://localhost:3000");
+        registry.add("studio.service.token", () -> "test-service-token");
     }
 
     @Autowired
@@ -164,6 +166,32 @@ class StudioJobsFlowTest {
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
         mockMvc.perform(get("/api/jobs/admin/dashboard").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void serviceTokenIntakeCreatesAJobAndRejectsBadTokens() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of(
+                "jobTypeId", "WEBSITE_REVISION",
+                "tenantId", java.util.UUID.randomUUID().toString(),
+                "title", "Website edit — Glam by Adaeze",
+                "brief", Map.of("source", "website-change-request", "details", "Make the logo bigger")));
+
+        // Valid service token (the platform's hand-off) -> a job lands AVAILABLE.
+        mockMvc.perform(post("/api/jobs/intake")
+                        .header(StudioServiceTokenFilter.HEADER, "test-service-token")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.id").exists())
+                .andExpect(jsonPath("$.data.status").value("AVAILABLE"))
+                .andExpect(jsonPath("$.data.jobNumber").value(org.hamcrest.Matchers.startsWith("WR-")));
+
+        // No token and a wrong token both fail closed (401), never creating a job.
+        mockMvc.perform(post("/api/jobs/intake").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/jobs/intake")
+                        .header(StudioServiceTokenFilter.HEADER, "wrong-token")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

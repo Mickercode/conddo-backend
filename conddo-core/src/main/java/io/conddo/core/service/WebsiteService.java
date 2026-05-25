@@ -5,6 +5,7 @@ import io.conddo.core.domain.Tenant;
 import io.conddo.core.domain.WebsiteChangeRequest;
 import io.conddo.core.repository.TenantRepository;
 import io.conddo.core.repository.WebsiteChangeRequestRepository;
+import io.conddo.core.studio.StudioJobGateway;
 import io.conddo.core.tenant.TenantContext;
 import io.conddo.core.tenant.TenantSession;
 import io.conddo.core.vertical.VerticalConfig;
@@ -14,7 +15,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * The Website module (§11.2). The tenant side is read + request-changes: the
@@ -31,16 +36,19 @@ public class WebsiteService {
     private final WebsiteChangeRequestRepository changeRequestRepository;
     private final VerticalConfigRegistry verticalConfig;
     private final TenantSession tenantSession;
+    private final Optional<StudioJobGateway> studioGateway;
     private final String baseDomain;
 
     public WebsiteService(TenantRepository tenantRepository,
                           WebsiteChangeRequestRepository changeRequestRepository,
                           VerticalConfigRegistry verticalConfig, TenantSession tenantSession,
+                          Optional<StudioJobGateway> studioGateway,
                           @Value("${conddo.base-domain:conddo.io}") String baseDomain) {
         this.tenantRepository = tenantRepository;
         this.changeRequestRepository = changeRequestRepository;
         this.verticalConfig = verticalConfig;
         this.tenantSession = tenantSession;
+        this.studioGateway = studioGateway;
         this.baseDomain = baseDomain.trim().toLowerCase();
     }
 
@@ -86,16 +94,52 @@ public class WebsiteService {
                 .map(ChangeRequestView::from).toList();
     }
 
-    /** Records an owner edit request. The Studio job hand-off is deferred — it lands PENDING. */
+    /**
+     * Records an owner edit request and hands it to Conddo Studio as a job
+     * (SERVICE_TOPOLOGY.md §4). If Studio isn't configured, or the hand-off can't
+     * be placed, the request stays {@code PENDING} for manual pickup — the owner's
+     * request never fails on a Studio outage.
+     */
     @Transactional
     public ChangeRequestView requestChange(String area, String details) {
         if (details == null || details.isBlank()) {
             throw new IllegalArgumentException("Describe the change you'd like");
         }
         tenantSession.bind();
-        WebsiteChangeRequest saved = changeRequestRepository.save(
-                new WebsiteChangeRequest(TenantContext.require(), area, details.trim()));
-        return ChangeRequestView.from(saved);
+        Tenant tenant = requireTenant();
+        UUID tenantId = TenantContext.require();
+        WebsiteChangeRequest request = changeRequestRepository.save(
+                new WebsiteChangeRequest(tenantId, area, details.trim()));
+        handOffToStudio(tenant, tenantId, request);
+        return ChangeRequestView.from(request);
+    }
+
+    /** Creates the Studio job for a change request and links the job id back onto it. */
+    private void handOffToStudio(Tenant tenant, UUID tenantId, WebsiteChangeRequest request) {
+        StudioJobGateway gateway = studioGateway.orElse(null);
+        if (gateway == null) {
+            return;
+        }
+        // A site that's never been built needs a BUILD; an existing one needs a REVISION.
+        boolean unbuilt = "NOT_STARTED".equalsIgnoreCase(tenant.getWebsiteStatus());
+        String jobType = unbuilt ? "WEBSITE_BUILD" : "WEBSITE_REVISION";
+        String title = (unbuilt ? "Website build — " : "Website edit — ") + tenant.getName();
+
+        Map<String, Object> brief = new LinkedHashMap<>();
+        brief.put("source", "website-change-request");
+        if (request.getId() != null) {
+            brief.put("changeRequestId", request.getId().toString());
+        }
+        if (request.getArea() != null && !request.getArea().isBlank()) {
+            brief.put("area", request.getArea());
+        }
+        brief.put("details", request.getDetails());
+        brief.put("businessName", tenant.getName());
+
+        gateway.createJob(tenantId, jobType, title, brief).ifPresent(ref -> {
+            request.markSubmittedToStudio(ref.jobId());
+            changeRequestRepository.save(request);
+        });
     }
 
     /**

@@ -37,6 +37,10 @@ studio:
     red-hours: ${STUDIO_SLA_RED_HOURS:6}
   cors:
     allowed-origins: ${STUDIO_CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  # Shared secret the platform sends to create jobs (X-Studio-Service-Token on
+  # /api/jobs/intake). Must match conddo-api's STUDIO_SERVICE_TOKEN. Blank = intake off.
+  service:
+    token: ${STUDIO_SERVICE_TOKEN:}
 
 management:
   endpoints:

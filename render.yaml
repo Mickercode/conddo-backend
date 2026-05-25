@@ -48,6 +48,16 @@ services:
       # Redis isn't provisioned yet (Phase 1 item 2) — keep its health check off.
       - key: CONDDO_REDIS_HEALTH_ENABLED
         value: "false"
+      # Conddo Studio hand-off (SERVICE_TOPOLOGY.md §4). Optional: if STUDIO_BASE_URL
+      # is unset, an owner website change-request is recorded PENDING (no Studio job).
+      # The service token is shared with the studio service (kept in sync below).
+      - key: STUDIO_BASE_URL
+        sync: false            # e.g. https://conddo-studio.onrender.com
+      - key: STUDIO_SERVICE_TOKEN
+        fromService:
+          type: web
+          name: conddo-studio
+          envVarKey: STUDIO_SERVICE_TOKEN
 
   # Internal Conddo Studio / Jobs Board service (Infrastructure §12/§13).
   # Standalone: own HMAC STUDIO_JWT + own studio/jobs schemas in the SAME managed
@@ -71,6 +81,10 @@ services:
         sync: false
       # Internal-staff HMAC secret — generated once by Render (≥ 32 bytes).
       - key: STUDIO_JWT_SECRET
+        generateValue: true
+      # Shared service token for the platform → Studio job-intake hand-off
+      # (SERVICE_TOPOLOGY.md §4). conddo-api pulls this same value via fromService.
+      - key: STUDIO_SERVICE_TOKEN
         generateValue: true
       - key: STUDIO_JWT_ISSUER
         value: https://jobs.conddo.io

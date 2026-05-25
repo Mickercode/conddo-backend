@@ -57,6 +57,12 @@ public class WebsiteChangeRequest {
         this.details = details;
     }
 
+    /** Links this request to the Studio job created for it, moving it past PENDING. */
+    public void markSubmittedToStudio(UUID studioJobId) {
+        this.studioJobId = studioJobId;
+        this.status = "SUBMITTED";
+    }
+
     public UUID getId() {
         return id;
     }

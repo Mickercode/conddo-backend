@@ -1821,6 +1821,13 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
 ## 12. Conddo Studio Backend
 
+> **See also `SERVICE_TOPOLOGY.md`.** As built, §12 (Conddo Studio) and §13 (Jobs
+> Board) are **one** service — `conddo-studio` (`studio` + `jobs` schemas, port 8083),
+> already the unified jobs engine for website builds, ad creatives, graphic design,
+> brand kits, and content writing. The website *runtime* (serving live sites) is a
+> separate, not-yet-built service (`conddo-sites`); see the topology doc for the
+> control/production/runtime split and the owner→job hand-off seam.
+
 ### 12.1 What the Studio Backend Does
 
 The Studio backend is a standalone Spring Boot service running on port 8083. It serves the internal website builder used by the production team. It is completely separate from the main platform backend.

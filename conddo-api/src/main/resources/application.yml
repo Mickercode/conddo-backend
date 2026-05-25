@@ -99,6 +99,14 @@ conddo:
       resend-cooldown: ${CONDDO_OTP_RESEND_COOLDOWN:30s}
       max-resends: ${CONDDO_OTP_MAX_RESENDS:5}
 
+# Conddo Studio (Production plane) hand-off — see SERVICE_TOPOLOGY.md §4. When both
+# base-url and service-token are set, an owner website change-request creates a Studio
+# job; otherwise the request is recorded PENDING for manual pickup. The token is the
+# shared secret Studio checks on its /api/jobs/intake endpoint (X-Studio-Service-Token).
+studio:
+  base-url: ${STUDIO_BASE_URL:}
+  service-token: ${STUDIO_SERVICE_TOKEN:}
+
 server:
   # Honour the platform-provided PORT (Render/Heroku) first, then our own var.
   port: ${PORT:${CONDDO_API_PORT:8080}}

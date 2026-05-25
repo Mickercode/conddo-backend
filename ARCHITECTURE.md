@@ -79,6 +79,12 @@ API Gateway — JWT validation · tenant context injection · module access chec
    └── MinIO  — file storage · tenant assets · documents · images
 ```
 
+> **Service topology — see `SERVICE_TOPOLOGY.md`.** The boxes above sit on three
+> planes: **Control** (`conddo-api` dashboard), **Production** (`conddo-studio` — the
+> jobs engine for website/ads/design/copy), and **Runtime** (`conddo-sites`, the
+> not-yet-built service that *serves* live tenant sites on subdomains + custom
+> domains). Split services along runtime/security boundaries, not features.
+
 ## 4. Auth Service
 Standalone Spring Boot app. **The only service that creates tenants.** Publishes
 `TenantCreated`, which the Module Registry consumes to activate modules.

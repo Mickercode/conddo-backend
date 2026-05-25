@@ -2,6 +2,7 @@ package io.conddo.studio.config;
 
 import io.conddo.studio.auth.StudioJwtService;
 import io.conddo.studio.auth.StudioSecurityErrorResponder;
+import io.conddo.studio.auth.StudioServiceTokenFilter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,6 +16,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -35,7 +37,8 @@ public class StudioSecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtDecoder studioJwtDecoder,
-                                                   StudioSecurityErrorResponder errorResponder) throws Exception {
+                                                   StudioSecurityErrorResponder errorResponder,
+                                                   StudioServiceTokenFilter serviceTokenFilter) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
@@ -44,15 +47,23 @@ public class StudioSecurityConfig {
                         .requestMatchers("/api/jobs/auth/login", "/api/jobs/auth/refresh",
                                 "/api/jobs/auth/logout").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                        // Service-to-service intake — authenticated by the X-Studio-Service-Token filter.
+                        .requestMatchers("/api/jobs/intake/**").hasRole("SERVICE")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .authenticationEntryPoint(errorResponder)
                         .jwt(jwt -> jwt.decoder(studioJwtDecoder)
                                 .jwtAuthenticationConverter(jwtAuthenticationConverter())))
+                .addFilterBefore(serviceTokenFilter, BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(errorResponder)
                         .accessDeniedHandler(errorResponder));
         return http.build();
+    }
+
+    @Bean
+    public StudioServiceTokenFilter studioServiceTokenFilter(StudioProperties properties) {
+        return new StudioServiceTokenFilter(properties.service() == null ? null : properties.service().token());
     }
 
     @Bean
