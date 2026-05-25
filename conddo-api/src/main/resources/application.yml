@@ -36,6 +36,10 @@ spring:
       port: ${CONDDO_REDIS_PORT:6379}
 
 conddo:
+  # Base domain for subdomain→tenant resolution (businessname.conddo.io). Set
+  # CONDDO_BASE_DOMAIN once the domain + wildcard DNS are pointed at the service.
+  base-domain: ${CONDDO_BASE_DOMAIN:conddo.io}
+
   # MinIO (object storage)
   minio:
     endpoint: ${CONDDO_MINIO_ENDPOINT:http://localhost:9000}

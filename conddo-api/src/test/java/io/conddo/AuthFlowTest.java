@@ -1157,6 +1157,26 @@ class AuthFlowTest {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void publicTenantResolvesFromSubdomainHost() throws Exception {
+        signupVerticalAndLogin("dom-a", "owner@dom.test", "fashion");
+
+        // A request on the tenant's subdomain resolves to its public identity — no auth.
+        mockMvc.perform(get("/api/v1/public/tenant").header("X-Forwarded-Host", "dom-a.conddo.io"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.slug").value("dom-a"))
+                .andExpect(jsonPath("$.data.name").value("dom-a Business"))
+                .andExpect(jsonPath("$.data.vertical").value("fashion"));
+
+        // Unknown, reserved, and apex hosts all fail closed (404).
+        mockMvc.perform(get("/api/v1/public/tenant").header("X-Forwarded-Host", "nope.conddo.io"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/public/tenant").header("X-Forwarded-Host", "api.conddo.io"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/public/tenant").header("X-Forwarded-Host", "conddo.io"))
+                .andExpect(status().isNotFound());
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private void signup(String slug, String adminEmail) throws Exception {
