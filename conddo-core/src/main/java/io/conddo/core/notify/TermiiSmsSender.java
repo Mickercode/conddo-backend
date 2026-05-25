@@ -3,6 +3,7 @@ package io.conddo.core.notify;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -18,6 +19,7 @@ import java.util.Map;
  * contract; confirm sender-id/credentials when you enable it.
  */
 @Component
+@Primary
 @ConditionalOnProperty(name = "conddo.notifications.sms.provider", havingValue = "termii")
 public class TermiiSmsSender implements SmsSender {
 

@@ -3,6 +3,7 @@ package io.conddo.core.notify;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -20,6 +21,7 @@ import java.util.Map;
  * contract; confirm the verified {@code from} domain when you enable it.
  */
 @Component
+@Primary
 @ConditionalOnProperty(name = "conddo.notifications.email.provider", havingValue = "resend")
 public class ResendEmailSender implements EmailSender {
 
