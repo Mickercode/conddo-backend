@@ -46,6 +46,14 @@ public class Tenant {
     @Column(nullable = false)
     private String status = "ACTIVE";
 
+    // ----- website (§11.2) — publish state; the site is built in Studio (§8) ---
+
+    @Column(name = "website_status", nullable = false)
+    private String websiteStatus = "NOT_STARTED";   // NOT_STARTED | IN_PROGRESS | LIVE
+
+    @Column(name = "website_published_at")
+    private OffsetDateTime websitePublishedAt;
+
     /** Setup-checklist steps (§11.1) the owner has explicitly dismissed. */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "setup_dismissed")
@@ -141,8 +149,32 @@ public class Tenant {
         return customDomain;
     }
 
+    /** Connects a custom domain (§11.2). Trims/normalises; null clears it. */
+    public void setCustomDomain(String customDomain) {
+        this.customDomain = (customDomain == null || customDomain.isBlank())
+                ? null : customDomain.trim().toLowerCase();
+    }
+
     public String getStatus() {
         return status;
+    }
+
+    public String getWebsiteStatus() {
+        return websiteStatus;
+    }
+
+    public void setWebsiteStatus(String websiteStatus) {
+        if (websiteStatus != null && !websiteStatus.isBlank()) {
+            this.websiteStatus = websiteStatus;
+        }
+    }
+
+    public OffsetDateTime getWebsitePublishedAt() {
+        return websitePublishedAt;
+    }
+
+    public void setWebsitePublishedAt(OffsetDateTime websitePublishedAt) {
+        this.websitePublishedAt = websitePublishedAt;
     }
 
     public List<String> getSetupDismissed() {
