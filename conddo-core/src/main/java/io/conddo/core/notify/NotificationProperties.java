@@ -17,7 +17,9 @@ public record NotificationProperties(
     public record Sms(String provider, String baseUrl, String apiKey, String senderId) {
     }
 
-    /** Email via Resend. */
-    public record Email(String provider, String baseUrl, String apiKey, String from) {
+    /** Email via Brevo (transactional) or Resend. {@code from} is the verified
+     *  sender address; {@code fromName} the display name; {@code logoUrl} the
+     *  public logo URL embedded in the branded HTML templates. */
+    public record Email(String provider, String baseUrl, String apiKey, String from, String fromName, String logoUrl) {
     }
 }

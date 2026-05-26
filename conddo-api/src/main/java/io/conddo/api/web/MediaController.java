@@ -43,14 +43,18 @@ public class MediaController {
         this.mediaService = mediaService;
     }
 
-    /** Upload a file (multipart). {@code kind} (logo|product|post|document|other) is optional. */
+    /**
+     * Upload a file (multipart). {@code purpose} (logo|website|product|…) is
+     * optional; {@code kind} is accepted as an alias for back-compat.
+     */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize(WRITE)
     public ResponseEntity<ApiResponse<MediaView>> upload(@RequestParam("file") MultipartFile file,
+                                                         @RequestParam(required = false) String purpose,
                                                          @RequestParam(required = false) String kind) {
         try {
             MediaView view = mediaService.upload(file.getOriginalFilename(), file.getContentType(),
-                    file.getSize(), file.getInputStream(), kind);
+                    file.getSize(), file.getInputStream(), purpose != null ? purpose : kind);
             return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(view));
         } catch (IOException ex) {
             throw new StorageException("Could not read the uploaded file", ex);

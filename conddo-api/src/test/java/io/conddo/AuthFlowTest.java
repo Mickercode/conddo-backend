@@ -256,9 +256,10 @@ class AuthFlowTest {
                         .content(json(Map.of("tenantSlug", "pr-a", "email", "owner@pr.test"))))
                 .andExpect(status().isOk());
 
-        // The reset email carries the token; capture the body and pull it out.
+        // The reset email carries the token; it's sent via the branded HTML template
+        // (sendHtml), so capture the text fallback (arg 4) and pull the token out.
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(emailSender).send(eq("owner@pr.test"), anyString(), bodyCaptor.capture());
+        verify(emailSender).sendHtml(eq("owner@pr.test"), anyString(), anyString(), bodyCaptor.capture());
         String resetToken = extractResetToken(bodyCaptor.getValue());
 
         mockMvc.perform(post("/auth/reset-password").contentType(MediaType.APPLICATION_JSON)
@@ -1362,13 +1363,13 @@ class AuthFlowTest {
         // Upload an image -> 201 with a presigned url + metadata.
         MockMultipartFile file = new MockMultipartFile(
                 "file", "My Logo!.png", "image/png", new byte[]{1, 2, 3, 4, 5});
-        MvcResult uploaded = mockMvc.perform(multipart("/api/v1/media").file(file).param("kind", "logo")
+        MvcResult uploaded = mockMvc.perform(multipart("/api/v1/media").file(file).param("purpose", "logo")
                         .header(HttpHeaders.AUTHORIZATION, bearer(token)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.url").exists())
                 .andExpect(jsonPath("$.data.contentType").value("image/png"))
                 .andExpect(jsonPath("$.data.kind").value("logo"))
-                .andExpect(jsonPath("$.data.sizeBytes").value(5))
+                .andExpect(jsonPath("$.data.size").value(5))
                 .andReturn();
         String mediaId = objectMapper.readTree(uploaded.getResponse().getContentAsString())
                 .path("data").path("id").asText();
@@ -1443,12 +1444,13 @@ class AuthFlowTest {
     }
 
     /**
-     * Extracts the 4-digit code from the (stubbed) OTP email. Signup OTP now goes
-     * by email (Resend free path; see RegistrationService) rather than SMS.
+     * Extracts the 4-digit code from the (stubbed) OTP email. Signup OTP goes by
+     * email via the branded HTML template, so it's delivered through
+     * {@code sendHtml(to, subject, html, text)} — capture the text fallback (arg 4).
      */
     private String capturedOtp(String email) {
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(emailSender, atLeastOnce()).send(eq(email), anyString(), body.capture());
+        verify(emailSender, atLeastOnce()).sendHtml(eq(email), anyString(), anyString(), body.capture());
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d{4}").matcher(body.getValue());
         assertTrue(matcher.find(), "no OTP code in email: " + body.getValue());
         return matcher.group();

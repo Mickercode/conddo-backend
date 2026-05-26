@@ -55,10 +55,16 @@ conddo:
     secret-key: ${CONDDO_MINIO_PASSWORD:conddo_secret_change_me}
     bucket: ${CONDDO_MINIO_BUCKET:conddo}
 
-  # Media library: presigned-URL lifetime + a defensive server-side size cap.
+  # Media library.
   media:
-    url-ttl: ${CONDDO_MEDIA_URL_TTL:PT24H}
-    max-bytes: ${CONDDO_MEDIA_MAX_BYTES:10485760}   # 10 MB; align with multipart max-file-size
+    # Public base for stable, publicly-fetchable URLs ({base}/{objectKey}) — REQUIRED
+    # in prod because the URL is embedded in the public website + emails. Point at a
+    # public bucket or CDN/custom domain (e.g. https://media.conddo.io or an R2
+    # public/r2.dev domain; for path-style S3 include the bucket). When blank, the
+    # API falls back to short-lived presigned URLs (dev only — they expire).
+    public-base-url: ${CONDDO_MEDIA_PUBLIC_BASE_URL:}
+    url-ttl: ${CONDDO_MEDIA_URL_TTL:PT24H}           # presigned fallback lifetime
+    max-bytes: ${CONDDO_MEDIA_MAX_BYTES:10485760}    # 10 MB; align with multipart max-file-size
 
   # Notification channels (PRD §6.4). provider 'log' = stub (the default).
   # SMS via Brevo (set provider=brevo + CONDDO_BREVO_API_KEY); email via Resend
@@ -71,11 +77,18 @@ conddo:
       api-key: ${CONDDO_BREVO_API_KEY:${CONDDO_TERMII_API_KEY:}}
       sender-id: ${CONDDO_SMS_SENDER_ID:Conddo}
     email:
-      # log (stub) | resend
+      # log (stub) | brevo | resend.  Brevo (preferred): free tier delivers to any
+      # recipient (300/day) with just a verified sender — no domain needed. Resend
+      # without a verified domain only delivers to your own account email.
       provider: ${CONDDO_EMAIL_PROVIDER:log}
-      base-url: ${CONDDO_RESEND_BASE_URL:https://api.resend.com}
-      api-key: ${CONDDO_RESEND_API_KEY:}
+      # Empty → each adapter uses its own default (Brevo api.brevo.com / Resend api.resend.com).
+      base-url: ${CONDDO_EMAIL_BASE_URL:}
+      # Brevo and Resend each use one API key; Brevo shares CONDDO_BREVO_API_KEY with SMS.
+      api-key: ${CONDDO_EMAIL_API_KEY:${CONDDO_BREVO_API_KEY:${CONDDO_RESEND_API_KEY:}}}
       from: ${CONDDO_EMAIL_FROM:no-reply@conddo.io}
+      from-name: ${CONDDO_EMAIL_FROM_NAME:Conddo}
+      # Public logo URL embedded in the branded HTML email templates.
+      logo-url: ${CONDDO_EMAIL_LOGO_URL:}
 
   security:
     # Access-token signing (RSA-256). Local default = generated dev key pair on

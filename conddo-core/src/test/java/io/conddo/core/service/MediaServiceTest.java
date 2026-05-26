@@ -38,8 +38,9 @@ class MediaServiceTest {
     private final MediaAssetRepository repository = mock(MediaAssetRepository.class);
     private final ObjectStorage storage = mock(ObjectStorage.class);
     private final TenantSession tenantSession = mock(TenantSession.class);
+    // No public base URL → falls back to presigned URLs (see publicBaseUrlYieldsStableUrl).
     private final MediaService service =
-            new MediaService(repository, storage, tenantSession, Duration.ofHours(24), 10L * 1024 * 1024);
+            new MediaService(repository, storage, tenantSession, "", Duration.ofHours(24), 10L * 1024 * 1024);
 
     @AfterEach
     void clear() {
@@ -67,6 +68,21 @@ class MediaServiceTest {
         verify(storage).put(key.capture(), eq("image/png"), eq(4L), any());
         assertTrue(key.getValue().startsWith("tenants/" + tenantId + "/"), "key is tenant-scoped");
         assertTrue(key.getValue().endsWith("My_Logo_.png"), "filename is sanitised: " + key.getValue());
+    }
+
+    @Test
+    void publicBaseUrlYieldsStableUrlNotPresigned() {
+        TenantContext.set(tenantId);
+        MediaService withCdn = new MediaService(
+                repository, storage, tenantSession, "https://media.conddo.io/", Duration.ofHours(24), 10L * 1024 * 1024);
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        MediaService.MediaView view = withCdn.upload("logo.png", "image/png", 4, bytes(), "logo");
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        verify(storage).put(key.capture(), eq("image/png"), eq(4L), any());
+        assertEquals("https://media.conddo.io/" + key.getValue(), view.url(), "stable public URL");
+        verify(storage, never()).presignedGetUrl(anyString(), any());
     }
 
     @Test
