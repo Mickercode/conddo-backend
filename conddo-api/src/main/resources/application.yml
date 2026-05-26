@@ -35,17 +35,30 @@ spring:
       host: ${CONDDO_REDIS_HOST:localhost}
       port: ${CONDDO_REDIS_PORT:6379}
 
+  # Media upload limits (§11.12). Keep max-file-size aligned with conddo.media.max-bytes.
+  servlet:
+    multipart:
+      max-file-size: ${CONDDO_MEDIA_MAX_FILE_SIZE:10MB}
+      max-request-size: ${CONDDO_MEDIA_MAX_REQUEST_SIZE:12MB}
+
 conddo:
   # Base domain for subdomain→tenant resolution (businessname.conddo.io). Set
   # CONDDO_BASE_DOMAIN once the domain + wildcard DNS are pointed at the service.
   base-domain: ${CONDDO_BASE_DOMAIN:conddo.io}
 
-  # MinIO (object storage)
+  # Object storage for media uploads (§11.12). S3-compatible: point at self-hosted
+  # MinIO OR a cloud bucket (Cloudflare R2 / AWS S3 / Backblaze B2). The endpoint
+  # must be reachable by the BROWSER — presigned URLs point straight at it.
   minio:
     endpoint: ${CONDDO_MINIO_ENDPOINT:http://localhost:9000}
     access-key: ${CONDDO_MINIO_USER:conddo}
     secret-key: ${CONDDO_MINIO_PASSWORD:conddo_secret_change_me}
     bucket: ${CONDDO_MINIO_BUCKET:conddo}
+
+  # Media library: presigned-URL lifetime + a defensive server-side size cap.
+  media:
+    url-ttl: ${CONDDO_MEDIA_URL_TTL:PT24H}
+    max-bytes: ${CONDDO_MEDIA_MAX_BYTES:10485760}   # 10 MB; align with multipart max-file-size
 
   # Notification channels (PRD §6.4). provider 'log' = stub (the default).
   # SMS via Brevo (set provider=brevo + CONDDO_BREVO_API_KEY); email via Resend
