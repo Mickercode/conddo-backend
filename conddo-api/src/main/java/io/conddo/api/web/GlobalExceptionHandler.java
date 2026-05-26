@@ -12,6 +12,7 @@ import io.conddo.core.common.ApiError;
 import io.conddo.core.common.ApiResponse;
 import io.conddo.core.common.NotFoundException;
 import io.conddo.core.common.RateLimitExceededException;
+import io.conddo.core.storage.StorageException;
 import io.conddo.core.tenant.TenantContextMissingException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.List;
 
@@ -127,6 +129,21 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleConflict(IllegalArgumentException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.fail(ApiError.of("CONFLICT", ex.getMessage())));
+    }
+
+    /** An over-limit upload is a client error, not a 500. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ApiResponse.fail(ApiError.of("FILE_TOO_LARGE", "The uploaded file is too large")));
+    }
+
+    /** Object storage is unreachable/misconfigured — a bad gateway, not our bug. */
+    @ExceptionHandler(StorageException.class)
+    public ResponseEntity<ApiResponse<Void>> handleStorage(StorageException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiResponse.fail(ApiError.of("STORAGE_ERROR",
+                        "File storage is unavailable. Check the object-storage configuration.")));
     }
 
     @ExceptionHandler(Exception.class)

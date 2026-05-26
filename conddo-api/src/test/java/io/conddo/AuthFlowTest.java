@@ -7,6 +7,7 @@ import io.conddo.api.security.RefreshCookies;
 import io.conddo.core.auth.PasswordHasher;
 import io.conddo.core.notify.EmailSender;
 import io.conddo.core.notify.SmsSender;
+import io.conddo.core.storage.ObjectStorage;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,9 +15,13 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -49,6 +54,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -108,6 +114,40 @@ class AuthFlowTest {
     private EmailSender emailSender;
     @MockBean
     private SmsSender smsSender;
+
+    /**
+     * In-memory object storage so the media endpoints can be exercised end-to-end
+     * without a live MinIO/S3. {@code @Primary} overrides the real MinIO adapter.
+     */
+    @TestConfiguration
+    static class StorageTestConfig {
+        @Bean
+        @Primary
+        ObjectStorage inMemoryObjectStorage() {
+            return new ObjectStorage() {
+                private final java.util.Map<String, byte[]> store = new java.util.concurrent.ConcurrentHashMap<>();
+
+                @Override
+                public void put(String key, String contentType, long size, java.io.InputStream data) {
+                    try {
+                        store.put(key, data.readAllBytes());
+                    } catch (java.io.IOException e) {
+                        throw new io.conddo.core.storage.StorageException("read failed", e);
+                    }
+                }
+
+                @Override
+                public String presignedGetUrl(String key, java.time.Duration ttl) {
+                    return "http://test-storage/" + key;
+                }
+
+                @Override
+                public void delete(String key) {
+                    store.remove(key);
+                }
+            };
+        }
+    }
 
     /**
      * Seeds a SUPER_ADMIN into the internal {@code staff_users} table (no tenant),
@@ -1313,6 +1353,54 @@ class AuthFlowTest {
                 .andExpect(jsonPath("$.data.measurementFields[0].unit").value("kg"));
         mockMvc.perform(get("/api/v1/verticals/food-and-beverage/config").header(HttpHeaders.AUTHORIZATION, bearer(token)))
                 .andExpect(jsonPath("$.data.websiteSections", org.hamcrest.Matchers.hasItem("menu")));
+    }
+
+    @Test
+    void mediaUploadListFetchAndDelete() throws Exception {
+        String token = signupVerticalAndLogin("media-co", "owner@media.test", "fashion");
+
+        // Upload an image -> 201 with a presigned url + metadata.
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "My Logo!.png", "image/png", new byte[]{1, 2, 3, 4, 5});
+        MvcResult uploaded = mockMvc.perform(multipart("/api/v1/media").file(file).param("kind", "logo")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.url").exists())
+                .andExpect(jsonPath("$.data.contentType").value("image/png"))
+                .andExpect(jsonPath("$.data.kind").value("logo"))
+                .andExpect(jsonPath("$.data.sizeBytes").value(5))
+                .andReturn();
+        String mediaId = objectMapper.readTree(uploaded.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+
+        // It shows in the tenant's library and is fetchable by id.
+        mockMvc.perform(get("/api/v1/media").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.meta.total").value(1));
+        mockMvc.perform(get("/api/v1/media/" + mediaId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.originalName").value("My Logo!.png"));
+
+        // A non-image/pdf upload is rejected.
+        MockMultipartFile bad = new MockMultipartFile(
+                "file", "app.exe", "application/octet-stream", new byte[]{9, 9});
+        mockMvc.perform(multipart("/api/v1/media").file(bad).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isConflict());
+
+        // Tenant isolation: another tenant can't see or fetch it.
+        String other = signupVerticalAndLogin("media-b", "owner@media-b.test", "fashion");
+        mockMvc.perform(get("/api/v1/media").header(HttpHeaders.AUTHORIZATION, bearer(other)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+        mockMvc.perform(get("/api/v1/media/" + mediaId).header(HttpHeaders.AUTHORIZATION, bearer(other)))
+                .andExpect(status().isNotFound());
+
+        // Delete removes it.
+        mockMvc.perform(delete("/api/v1/media/" + mediaId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(get("/api/v1/media/" + mediaId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isNotFound());
     }
 
     // ----- helpers ---------------------------------------------------------
