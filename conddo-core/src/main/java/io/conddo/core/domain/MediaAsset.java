@@ -29,6 +29,10 @@ public class MediaAsset {
     @Column(name = "storage_key", nullable = false)
     private String storageKey;
 
+    /** The public, CDN-backed URL (Cloudinary secure_url) — stable, embedded everywhere. */
+    @Column(name = "url")
+    private String url;
+
     @Column(name = "content_type")
     private String contentType;
 
@@ -47,10 +51,11 @@ public class MediaAsset {
     protected MediaAsset() {
     }
 
-    public MediaAsset(UUID tenantId, String storageKey, String contentType, long sizeBytes,
+    public MediaAsset(UUID tenantId, String storageKey, String url, String contentType, long sizeBytes,
                       String originalName, String kind) {
         this.tenantId = tenantId;
         this.storageKey = storageKey;
+        this.url = url;
         this.contentType = contentType;
         this.sizeBytes = sizeBytes;
         this.originalName = originalName;
@@ -67,6 +72,10 @@ public class MediaAsset {
 
     public String getStorageKey() {
         return storageKey;
+    }
+
+    public String getUrl() {
+        return url;
     }
 
     public String getContentType() {

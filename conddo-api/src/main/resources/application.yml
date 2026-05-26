@@ -46,24 +46,15 @@ conddo:
   # CONDDO_BASE_DOMAIN once the domain + wildcard DNS are pointed at the service.
   base-domain: ${CONDDO_BASE_DOMAIN:conddo.io}
 
-  # Object storage for media uploads (§11.12). S3-compatible: point at self-hosted
-  # MinIO OR a cloud bucket (Cloudflare R2 / AWS S3 / Backblaze B2). The endpoint
-  # must be reachable by the BROWSER — presigned URLs point straight at it.
-  minio:
-    endpoint: ${CONDDO_MINIO_ENDPOINT:http://localhost:9000}
-    access-key: ${CONDDO_MINIO_USER:conddo}
-    secret-key: ${CONDDO_MINIO_PASSWORD:conddo_secret_change_me}
-    bucket: ${CONDDO_MINIO_BUCKET:conddo}
+  # Media storage via Cloudinary (§11.12). Upload returns a permanent, public,
+  # CDN-backed secure_url (embedded in the dashboard, public website + emails).
+  cloudinary:
+    # cloudinary://<api_key>:<api_secret>@<cloud_name> — from the Cloudinary dashboard.
+    # Blank → uploads return 502 until configured.
+    url: ${CLOUDINARY_URL:}
 
   # Media library.
   media:
-    # Public base for stable, publicly-fetchable URLs ({base}/{objectKey}) — REQUIRED
-    # in prod because the URL is embedded in the public website + emails. Point at a
-    # public bucket or CDN/custom domain (e.g. https://media.conddo.io or an R2
-    # public/r2.dev domain; for path-style S3 include the bucket). When blank, the
-    # API falls back to short-lived presigned URLs (dev only — they expire).
-    public-base-url: ${CONDDO_MEDIA_PUBLIC_BASE_URL:}
-    url-ttl: ${CONDDO_MEDIA_URL_TTL:PT24H}           # presigned fallback lifetime
     max-bytes: ${CONDDO_MEDIA_MAX_BYTES:10485760}    # 10 MB; align with multipart max-file-size
 
   # Notification channels (PRD §6.4). provider 'log' = stub (the default).

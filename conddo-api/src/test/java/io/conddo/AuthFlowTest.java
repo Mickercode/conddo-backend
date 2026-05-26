@@ -117,7 +117,7 @@ class AuthFlowTest {
 
     /**
      * In-memory object storage so the media endpoints can be exercised end-to-end
-     * without a live MinIO/S3. {@code @Primary} overrides the real MinIO adapter.
+     * without a live Cloudinary. {@code @Primary} overrides the real adapter.
      */
     @TestConfiguration
     static class StorageTestConfig {
@@ -128,22 +128,18 @@ class AuthFlowTest {
                 private final java.util.Map<String, byte[]> store = new java.util.concurrent.ConcurrentHashMap<>();
 
                 @Override
-                public void put(String key, String contentType, long size, java.io.InputStream data) {
+                public Stored put(String key, String contentType, long size, java.io.InputStream data) {
                     try {
                         store.put(key, data.readAllBytes());
                     } catch (java.io.IOException e) {
                         throw new io.conddo.core.storage.StorageException("read failed", e);
                     }
+                    return new Stored(key, "http://test-storage/" + key);
                 }
 
                 @Override
-                public String presignedGetUrl(String key, java.time.Duration ttl) {
-                    return "http://test-storage/" + key;
-                }
-
-                @Override
-                public void delete(String key) {
-                    store.remove(key);
+                public void delete(String id) {
+                    store.remove(id);
                 }
             };
         }
