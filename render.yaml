@@ -48,6 +48,10 @@ services:
       # Redis isn't provisioned yet (Phase 1 item 2) — keep its health check off.
       - key: CONDDO_REDIS_HEALTH_ENABLED
         value: "false"
+      # Media storage (§11.12) — Cloudinary. cloudinary://<key>:<secret>@<cloud> from
+      # the Cloudinary dashboard. Unset = uploads return 502 until configured.
+      - key: CLOUDINARY_URL
+        sync: false
       # Conddo Studio hand-off (SERVICE_TOPOLOGY.md §4). Optional: if STUDIO_BASE_URL
       # is unset, an owner website change-request is recorded PENDING (no Studio job).
       # The service token is shared with the studio service (kept in sync below).

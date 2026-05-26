@@ -11,7 +11,6 @@ import org.mockito.ArgumentCaptor;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
-import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -28,9 +27,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * MediaService logic with mocked storage + repo: uploads land under the tenant
- * (collision-free key, presigned URL returned), bad inputs are rejected before
- * touching storage, and delete removes both the object and the index row.
+ * MediaService logic with a mocked storage + repo: uploads land under the tenant
+ * and store the provider's public URL, bad inputs are rejected before touching
+ * storage, and delete removes both the object and the index row.
  */
 class MediaServiceTest {
 
@@ -38,9 +37,8 @@ class MediaServiceTest {
     private final MediaAssetRepository repository = mock(MediaAssetRepository.class);
     private final ObjectStorage storage = mock(ObjectStorage.class);
     private final TenantSession tenantSession = mock(TenantSession.class);
-    // No public base URL → falls back to presigned URLs (see publicBaseUrlYieldsStableUrl).
     private final MediaService service =
-            new MediaService(repository, storage, tenantSession, "", Duration.ofHours(24), 10L * 1024 * 1024);
+            new MediaService(repository, storage, tenantSession, 10L * 1024 * 1024);
 
     @AfterEach
     void clear() {
@@ -52,37 +50,22 @@ class MediaServiceTest {
     }
 
     @Test
-    void uploadStoresUnderTenantAndReturnsPresignedUrl() {
+    void uploadStoresUnderTenantAndReturnsTheProvidersPublicUrl() {
         TenantContext.set(tenantId);
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(storage.presignedGetUrl(anyString(), any())).thenReturn("https://bucket/signed");
+        when(storage.put(anyString(), eq("image/png"), eq(4L), any()))
+                .thenReturn(new ObjectStorage.Stored("cloud-public-id", "https://res.cloudinary.com/logo.png"));
 
         MediaService.MediaView view = service.upload("My Logo!.png", "image/png", 4, bytes(), "logo");
 
-        assertEquals("https://bucket/signed", view.url());
+        assertEquals("https://res.cloudinary.com/logo.png", view.url());
         assertEquals("image/png", view.contentType());
         assertEquals("logo", view.kind());
         assertEquals("My Logo!.png", view.originalName());
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(storage).put(key.capture(), eq("image/png"), eq(4L), any());
-        assertTrue(key.getValue().startsWith("tenants/" + tenantId + "/"), "key is tenant-scoped");
-        assertTrue(key.getValue().endsWith("My_Logo_.png"), "filename is sanitised: " + key.getValue());
-    }
-
-    @Test
-    void publicBaseUrlYieldsStableUrlNotPresigned() {
-        TenantContext.set(tenantId);
-        MediaService withCdn = new MediaService(
-                repository, storage, tenantSession, "https://media.conddo.io/", Duration.ofHours(24), 10L * 1024 * 1024);
-        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
-        MediaService.MediaView view = withCdn.upload("logo.png", "image/png", 4, bytes(), "logo");
-
-        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
-        verify(storage).put(key.capture(), eq("image/png"), eq(4L), any());
-        assertEquals("https://media.conddo.io/" + key.getValue(), view.url(), "stable public URL");
-        verify(storage, never()).presignedGetUrl(anyString(), any());
+        assertTrue(key.getValue().startsWith("tenants/" + tenantId + "/"), "key is tenant-scoped: " + key.getValue());
     }
 
     @Test
@@ -104,13 +87,14 @@ class MediaServiceTest {
     @Test
     void deleteRemovesObjectThenRow() {
         TenantContext.set(tenantId);
-        MediaAsset asset = new MediaAsset(tenantId, "tenants/x/abc-logo.png", "image/png", 4, "logo.png", "logo");
+        MediaAsset asset = new MediaAsset(tenantId, "cloud-public-id",
+                "https://res.cloudinary.com/logo.png", "image/png", 4, "logo.png", "logo");
         UUID id = UUID.randomUUID();
         when(repository.findById(id)).thenReturn(Optional.of(asset));
 
         service.delete(id);
 
-        verify(storage).delete("tenants/x/abc-logo.png");
+        verify(storage).delete("cloud-public-id");
         verify(repository).delete(asset);
     }
 }

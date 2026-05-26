@@ -68,10 +68,11 @@
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
-        <!-- MinIO object storage -->
+        <!-- Cloudinary — CDN-backed media storage (upload returns a public secure_url) -->
         <dependency>
-            <groupId>io.minio</groupId>
-            <artifactId>minio</artifactId>
+            <groupId>com.cloudinary</groupId>
+            <artifactId>cloudinary-http44</artifactId>
+            <version>1.39.0</version>
         </dependency>
 
         <!-- Testing -->
