@@ -17,7 +17,16 @@ public record StudioProperties(Jwt jwt, Sla sla, Cors cors, Service service, Ai 
     public record Sla(int amberHours, int redHours) {
     }
 
-    public record Cors(List<String> allowedOrigins) {
+    /**
+     * Browser origins for the Studio frontend. Two complementary forms:
+     * <ul>
+     *   <li>{@code allowedOrigins} — exact list (STUDIO_CORS_ALLOWED_ORIGINS).</li>
+     *   <li>{@code allowedOriginPatterns} — wildcards (STUDIO_CORS_ALLOWED_ORIGIN_PATTERNS),
+     *       e.g. {@code https://*.vercel.app} for Vercel preview deploys.</li>
+     * </ul>
+     * Bare {@code "*"} is disallowed because the Studio passes credentials.
+     */
+    public record Cors(List<String> allowedOrigins, List<String> allowedOriginPatterns) {
     }
 
     /**

@@ -79,7 +79,15 @@ public class StudioSecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource(StudioProperties properties) {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(properties.cors().allowedOrigins());
+        StudioProperties.Cors cors = properties.cors();
+        if (cors.allowedOrigins() != null && !cors.allowedOrigins().isEmpty()) {
+            config.setAllowedOrigins(cors.allowedOrigins());
+        }
+        // Patterns enable Vercel preview/branch URLs and tenant subdomains without
+        // pre-listing every origin. Mirrors conddo-api's CORS config.
+        if (cors.allowedOriginPatterns() != null && !cors.allowedOriginPatterns().isEmpty()) {
+            config.setAllowedOriginPatterns(cors.allowedOriginPatterns());
+        }
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
         config.setAllowCredentials(true);

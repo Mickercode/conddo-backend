@@ -35,8 +35,14 @@ studio:
   sla:
     amber-hours: ${STUDIO_SLA_AMBER_HOURS:24}
     red-hours: ${STUDIO_SLA_RED_HOURS:6}
+  # Browser origins for the Studio frontend.
+  #   allowed-origins         — exact origins (STUDIO_CORS_ALLOWED_ORIGINS), comma-separated.
+  #   allowed-origin-patterns — wildcards (STUDIO_CORS_ALLOWED_ORIGIN_PATTERNS), e.g.
+  #                             "https://*.vercel.app" for Vercel preview deploys.
+  # Note the Studio frontend uses port 3001 locally; conddo-app uses 3000 — list both for local dev.
   cors:
-    allowed-origins: ${STUDIO_CORS_ALLOWED_ORIGINS:http://localhost:3000}
+    allowed-origins: ${STUDIO_CORS_ALLOWED_ORIGINS:http://localhost:3001,http://localhost:3000}
+    allowed-origin-patterns: ${STUDIO_CORS_ALLOWED_ORIGIN_PATTERNS:}
   # Shared secret the platform sends to create jobs (X-Studio-Service-Token on
   # /api/jobs/intake). Must match conddo-api's STUDIO_SERVICE_TOKEN. Blank = intake off.
   service:
