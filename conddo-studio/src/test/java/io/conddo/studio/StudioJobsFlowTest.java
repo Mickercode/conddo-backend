@@ -393,6 +393,74 @@ class StudioJobsFlowTest {
     }
 
     @Test
+    void adminCanCrudJobTypes() throws Exception {
+        String adminToken = login(ADMIN);
+
+        // List the seeded catalogue.
+        mockMvc.perform(get("/api/jobs/admin/job-types").header(HttpHeaders.AUTHORIZATION, bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(6)));
+
+        // Create a new type.
+        mockMvc.perform(post("/api/jobs/admin/job-types").header(HttpHeaders.AUTHORIZATION, bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "SOCIAL_MEDIA",
+                                "displayName", "Social Media",
+                                "colour", "#22C55E",
+                                "assignedToRoles", java.util.List.of("DESIGNER", "WRITER"),
+                                "slaHours", 12,
+                                "qaRequired", true))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.id").value("SOCIAL_MEDIA"))
+                .andExpect(jsonPath("$.data.slaHours").value(12));
+
+        // Duplicate ID → 409.
+        mockMvc.perform(post("/api/jobs/admin/job-types").header(HttpHeaders.AUTHORIZATION, bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "SOCIAL_MEDIA", "displayName", "Dup", "slaHours", 12))))
+                .andExpect(status().isConflict());
+
+        // Patch — tune SLA hours.
+        mockMvc.perform(patch("/api/jobs/admin/job-types/SOCIAL_MEDIA").header(HttpHeaders.AUTHORIZATION, bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("slaHours", 8))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.slaHours").value(8));
+
+        // Soft-delete.
+        mockMvc.perform(delete("/api/jobs/admin/job-types/SOCIAL_MEDIA")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(adminToken)))
+                .andExpect(status().isNoContent());
+
+        // After disable, list still includes it but active=false.
+        MvcResult listed = mockMvc.perform(get("/api/jobs/admin/job-types")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode types = objectMapper.readTree(listed.getResponse().getContentAsString()).path("data");
+        JsonNode social = null;
+        for (JsonNode entry : types) {
+            if ("SOCIAL_MEDIA".equals(entry.path("id").asText())) {
+                social = entry;
+                break;
+            }
+        }
+        org.junit.jupiter.api.Assertions.assertNotNull(social, "SOCIAL_MEDIA should still appear after soft-delete");
+        org.junit.jupiter.api.Assertions.assertFalse(social.path("active").asBoolean(),
+                "soft-deleted type should be flagged active=false");
+
+        // Developer cannot reach the admin catalogue endpoints (403).
+        String devToken = login(DEV);
+        mockMvc.perform(post("/api/jobs/admin/job-types").header(HttpHeaders.AUTHORIZATION, bearer(devToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "BLOCKED", "displayName", "x", "slaHours", 8))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void unauthenticatedIsRejectedAndBadLoginFails() throws Exception {
         mockMvc.perform(get("/api/jobs/my-jobs"))
                 .andExpect(status().isUnauthorized())

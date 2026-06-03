@@ -44,6 +44,62 @@ public class JobType {
     protected JobType() {
     }
 
+    /**
+     * Admin-facing constructor. Used by {@link io.conddo.studio.jobs.JobTypeService}
+     * to create a fresh job type from CRUD; the no-arg constructor remains JPA's
+     * default for hydration.
+     */
+    public JobType(String id, String displayName, String colour, List<String> assignedToRoles,
+                   int slaHours, boolean qaRequired, List<Map<String, Object>> qaChecklist) {
+        this.id = id;
+        this.displayName = displayName;
+        this.colour = colour == null || colour.isBlank() ? "#7C5CBF" : colour;
+        this.assignedToRoles = assignedToRoles == null ? List.of() : assignedToRoles;
+        this.slaHours = slaHours;
+        this.qaRequired = qaRequired;
+        this.qaChecklist = qaChecklist == null ? List.of() : qaChecklist;
+    }
+
+    // ----- mutators (admin CRUD) ---------------------------------------------
+
+    public void rename(String displayName) {
+        if (displayName != null && !displayName.isBlank()) {
+            this.displayName = displayName;
+        }
+    }
+
+    public void recolour(String colour) {
+        if (colour != null && !colour.isBlank()) {
+            this.colour = colour;
+        }
+    }
+
+    public void setSlaHours(int slaHours) {
+        if (slaHours > 0) {
+            this.slaHours = slaHours;
+        }
+    }
+
+    public void setQaRequired(boolean qaRequired) {
+        this.qaRequired = qaRequired;
+    }
+
+    public void setAssignedToRoles(List<String> assignedToRoles) {
+        if (assignedToRoles != null) {
+            this.assignedToRoles = assignedToRoles;
+        }
+    }
+
+    public void setQaChecklist(List<Map<String, Object>> qaChecklist) {
+        if (qaChecklist != null) {
+            this.qaChecklist = qaChecklist;
+        }
+    }
+
+    public void setActive(boolean active) {
+        this.active = active;
+    }
+
     public String getId() {
         return id;
     }

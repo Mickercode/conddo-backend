@@ -2,20 +2,25 @@ package io.conddo.studio.web;
 
 import io.conddo.studio.common.ApiResponse;
 import io.conddo.studio.jobs.JobService;
+import io.conddo.studio.jobs.JobTypeService;
 import io.conddo.studio.staff.StaffService;
 import io.conddo.studio.web.dto.AdminDashboardResponse;
 import io.conddo.studio.web.dto.CreateJobRequest;
+import io.conddo.studio.web.dto.CreateJobTypeRequest;
 import io.conddo.studio.web.dto.CreateStaffRequest;
 import io.conddo.studio.web.dto.EscalateRequest;
 import io.conddo.studio.web.dto.ExtendSlaRequest;
 import io.conddo.studio.web.dto.JobDetailResponse;
+import io.conddo.studio.web.dto.JobTypeDto;
 import io.conddo.studio.web.dto.ReassignRequest;
 import io.conddo.studio.web.dto.StaffDto;
+import io.conddo.studio.web.dto.UpdateJobTypeRequest;
 import io.conddo.studio.web.dto.UpdateStaffRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -35,10 +40,13 @@ public class AdminController {
 
     private final JobService jobService;
     private final StaffService staffService;
+    private final JobTypeService jobTypeService;
 
-    public AdminController(JobService jobService, StaffService staffService) {
+    public AdminController(JobService jobService, StaffService staffService,
+                           JobTypeService jobTypeService) {
         this.jobService = jobService;
         this.staffService = staffService;
+        this.jobTypeService = jobTypeService;
     }
 
     @GetMapping("/dashboard")
@@ -87,5 +95,43 @@ public class AdminController {
                                                    @RequestBody(required = false) EscalateRequest request) {
         jobService.escalate(id, request == null ? null : request.reason());
         return ApiResponse.ok(JobDetailResponse.from(jobService.detail(id)));
+    }
+
+    // ----- job-type catalogue (Phase 8 §8 — SLA-settings) --------------------
+
+    /** Production catalogue: visible to leads + admins so they can review the SLA matrix. */
+    @GetMapping("/job-types")
+    public ApiResponse<List<JobTypeDto>> listJobTypes() {
+        return ApiResponse.ok(jobTypeService.list().stream().map(JobTypeDto::from).toList());
+    }
+
+    /** Add a new job type (e.g. SOCIAL_MEDIA). ADMIN-only — only the production manager curates the catalogue. */
+    @PostMapping("/job-types")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<JobTypeDto>> createJobType(@Valid @RequestBody CreateJobTypeRequest request) {
+        JobTypeDto body = JobTypeDto.from(jobTypeService.create(
+                request.id(), request.displayName(), request.colour(),
+                request.assignedToRoles(), request.slaHours(),
+                request.qaRequired() != null && request.qaRequired(),
+                request.qaChecklist()));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(body));
+    }
+
+    /** Tune an existing type — SLA hours, label, checklist, activation. PATCH semantics (null = no-op). */
+    @PatchMapping("/job-types/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<JobTypeDto> updateJobType(@PathVariable String id,
+                                                 @Valid @RequestBody UpdateJobTypeRequest request) {
+        return ApiResponse.ok(JobTypeDto.from(jobTypeService.update(id,
+                request.displayName(), request.colour(), request.assignedToRoles(),
+                request.slaHours(), request.qaRequired(), request.qaChecklist(), request.active())));
+    }
+
+    /** Soft-disable — past jobs keep their reference; the type drops off the create-job dropdown. */
+    @DeleteMapping("/job-types/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Void> disableJobType(@PathVariable String id) {
+        jobTypeService.disable(id);
+        return ResponseEntity.noContent().build();
     }
 }
