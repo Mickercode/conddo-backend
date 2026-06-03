@@ -31,7 +31,10 @@
 17. [Environment Variables](#17-environment-variables)
 18. [Docker Configuration](#18-docker-configuration)
 19. [Implementation Sequence](#19-implementation-sequence)
-20. [Implementation Rules for Agents](#20-implementation-rules-for-agents)
+20. ~~Implementation Rules for Agents~~ → moved to §23
+21. [Website Builder API](#21-website-builder-api)   *(post-V1)*
+22. [Job Export & Import](#22-job-export--import)   *(post-V1)*
+23. [Implementation Rules for Agents](#23-implementation-rules-for-agents)
 
 ---
 
@@ -1931,6 +1934,22 @@ ADMIN (TEAM_LEAD and ADMIN only)
 
   GET    /admin/sla               SLA health overview
   PATCH  /admin/sla/settings      Update SLA thresholds
+
+BUILDER (see §21 for full spec)
+  GET    /jobs/:id/site                       Get the job's site (pages + sections + theme)
+  PUT    /jobs/:id/site                       Replace the entire site (for import / bulk save)
+  PATCH  /jobs/:id/site/theme                 Update theme (primary hex, fonts)
+  POST   /jobs/:id/site/pages                 Create a page
+  PATCH  /jobs/:id/site/pages/:pageId         Update page (title, slug, order)
+  DELETE /jobs/:id/site/pages/:pageId         Delete page
+  POST   /jobs/:id/site/pages/:pageId/sections             Add a section to a page
+  PATCH  /jobs/:id/site/pages/:pageId/sections/:sectionId  Update section content / order
+  DELETE /jobs/:id/site/pages/:pageId/sections/:sectionId  Remove a section
+  POST   /jobs/:id/site/publish                Mark current site state as the submitted build
+
+EXPORT / IMPORT (see §22 for full spec)
+  GET    /jobs/:id/export                      Download job as a ZIP bundle (manifest + assets + site)
+  POST   /jobs/:id/import                      Upload a previously-exported bundle to replace state
 ```
 
 ---
@@ -2220,11 +2239,324 @@ PHASE 10 — Testing and Polish (Week 12)
   ✓ Load test: 50 concurrent SSE connections
   ✓ Security: ensure no cross-staff data leakage
   Definition of done: all tests pass, ready for production
+
+PHASE 11 — Website Builder (post-V1)   ← see §21
+  ☐ V3__studio_builder.sql migration: sites, site_pages, site_sections
+  ☐ Site / Page / Section JPA entities with optimistic locking
+  ☐ SiteService: lazy-create on first GET; validate section content per type
+  ☐ BuilderController endpoints (see §15 BUILDER group)
+  ☐ Wire /jobs/:id/submit to auto-publish the site
+  ☐ Add site.section_updated + site.published SSE events to SseService
+  ☐ Section type catalogue (HERO/SERVICES/ABOUT/CTA/GALLERY/CONTACT/CUSTOM)
+  ☐ AI assistant writes directly into matching section content (existing
+    /ai-suggest endpoint now reads/writes site_sections instead of job.ai_suggestions)
+  Definition of done: a developer can build a full multi-page website in
+    Studio, see live changes via SSE, and submit it for QA without
+    leaving the app
+
+PHASE 12 — Job Export / Import (post-V1)   ← see §22
+  ☐ GET /jobs/:id/export — streams a ZIP (manifest, brief.md, site.json,
+    ai-suggestions.json, qa-history.json, activity.json, /assets/*)
+  ☐ Server-side Cloudinary asset download (no redirect — bundle must
+    work offline)
+  ☐ SHA-256 checksum in manifest; verified on re-import
+  ☐ POST /jobs/:id/import (multipart) — applies bundle atomically;
+    optimistic-lock check via manifest.job.version vs current
+  ☐ Activity log: JOB_EXPORTED, JOB_IMPORTED entries
+  ☐ Env vars: STUDIO_EXPORT_ASSET_INLINE_MAX_BYTES (50 MB default),
+    STUDIO_IMPORT_MAX_BYTES (256 MB default)
+  Definition of done: a staff member can export a job, work on it
+    locally (edit the brief, run AI prompts offline, drop new assets
+    in /assets/), and re-import to overwrite cloud state — with a
+    clear 409 if someone else changed the job meanwhile
 ```
 
 ---
 
-## 20. Implementation Rules for Agents
+## 21. Website Builder API
+
+**Status:** Not yet implemented. Currently the developer builds the website in an
+external Studio tool and submits its URL via `/jobs/:id/submit`. This section
+specifies the in-app builder backend so that flow can move inside Conddo Studio.
+
+### 21.1 Domain Model
+
+A **Site** is 1:1 with a Job — the customer's website-in-progress. Sites hold
+**Pages** (home, services, about, contact, …). Pages hold ordered **Sections**
+(HERO, SERVICES, ABOUT, CTA, GALLERY, CONTACT, …). Sections are typed: each
+type has a known content schema (validated server-side) plus a freeform JSONB
+overrides bucket for one-off tweaks.
+
+```
+Site
+  ├── theme: { primaryHex, fontHeading, fontBody }
+  ├── meta: { title, description, favicon? }
+  ├── pages: Page[]
+  │     ├── id, slug, title, order, isHome
+  │     └── sections: Section[]
+  │           ├── id, type (HERO|SERVICES|ABOUT|...), order
+  │           └── content: JSONB (shape determined by type)
+  └── status: DRAFT | PUBLISHED
+```
+
+### 21.2 Database Schema (Flyway: V3__studio_builder.sql)
+
+```sql
+CREATE TABLE studio.sites (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id          UUID NOT NULL UNIQUE REFERENCES studio.jobs(id) ON DELETE CASCADE,
+    theme           JSONB NOT NULL DEFAULT '{}'::jsonb,
+    meta            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status          TEXT NOT NULL DEFAULT 'DRAFT'
+                      CHECK (status IN ('DRAFT','PUBLISHED')),
+    published_at    TIMESTAMPTZ,
+    version         INTEGER NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE studio.site_pages (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    site_id       UUID NOT NULL REFERENCES studio.sites(id) ON DELETE CASCADE,
+    slug          TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    is_home       BOOLEAN NOT NULL DEFAULT false,
+    order_index   INTEGER NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (site_id, slug)
+);
+
+CREATE TABLE studio.site_sections (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    page_id       UUID NOT NULL REFERENCES studio.site_pages(id) ON DELETE CASCADE,
+    section_type  TEXT NOT NULL,                 -- HERO | SERVICES | ABOUT | CTA | GALLERY | CONTACT | CUSTOM
+    content       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    order_index   INTEGER NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_site_pages_site ON studio.site_pages (site_id, order_index);
+CREATE INDEX idx_site_sections_page ON studio.site_sections (page_id, order_index);
+```
+
+A site is created lazily on first builder open if one doesn't exist for the job.
+On `POST /jobs/:id/submit`, the site is auto-`PUBLISHED` and its rendered URL
+(once `conddo-sites` is online — see §11) replaces the manual `studioUrl` field.
+
+### 21.3 Endpoint Contracts
+
+All endpoints require the staff member to be assigned to the job (`assignedTo`
+matches the caller), or be `TEAM_LEAD` / `ADMIN`. Optimistic locking via the
+`Site.version` field — every mutation increments it; clients must send the
+expected version in `If-Match` or get `409 Conflict`.
+
+```
+GET    /api/jobs/:id/site
+       → 200 { site: { id, theme, meta, status, version, pages: [{ id, slug,
+                       title, order, isHome, sections: [...] }] } }
+       → 404 if no site yet (FE should call PUT to lazily create)
+
+PUT    /api/jobs/:id/site
+       Body: complete Site object (theme + meta + pages + sections).
+       Replaces the entire site state — used by import and by "save all"
+       in the builder when the user has done many local edits.
+       Headers: If-Match: <version>
+       → 200 { site }     (version incremented)
+       → 409 if If-Match mismatches
+
+PATCH  /api/jobs/:id/site/theme
+       Body: { primaryHex?, fontHeading?, fontBody? }
+       → 200 { site.theme }
+
+POST   /api/jobs/:id/site/pages
+       Body: { slug, title, isHome?, order? }
+       → 201 { page }
+
+PATCH  /api/jobs/:id/site/pages/:pageId
+       Body: { title?, slug?, order?, isHome? }
+       → 200 { page }
+
+DELETE /api/jobs/:id/site/pages/:pageId
+       → 204 (cannot delete the home page; returns 422 with code HOME_PAGE_REQUIRED)
+
+POST   /api/jobs/:id/site/pages/:pageId/sections
+       Body: { type, content?, order? }
+       → 201 { section }
+
+PATCH  /api/jobs/:id/site/pages/:pageId/sections/:sectionId
+       Body: { content?, order? }     (type is immutable; delete + create to change)
+       → 200 { section }
+
+DELETE /api/jobs/:id/site/pages/:pageId/sections/:sectionId
+       → 204
+
+POST   /api/jobs/:id/site/publish
+       Marks the site PUBLISHED, sets published_at, snapshots into the
+       activity log as `SITE_PUBLISHED`. Auto-fired by `/jobs/:id/submit`.
+       → 200 { site }
+```
+
+### 21.4 Section Type Catalogue
+
+The backend validates each section's `content` against the type. Initial set:
+
+| Type     | Content shape (JSONB) |
+|----------|----------------------|
+| `HERO`     | `{ headline, subheadline, ctaText, ctaHref, backgroundImage? }` |
+| `SERVICES` | `{ heading, services: [{ name, description, icon? }] }` |
+| `ABOUT`    | `{ heading, body, image? }` |
+| `CTA`      | `{ headline, body?, primaryCta: { text, href }, secondaryCta? }` |
+| `GALLERY`  | `{ heading, images: [{ url, alt, caption? }] }` |
+| `CONTACT`  | `{ heading, address?, phone?, email?, mapUrl?, hours? }` |
+| `CUSTOM`   | `{ html, css? }` — escape hatch; never validated beyond size limit |
+
+AI suggestions (existing `/jobs/:id/ai-suggest` endpoint) write directly into a
+matching section's `content` when one exists.
+
+### 21.5 SSE Event Additions
+
+Add to `SseService` broadcast set:
+
+```
+site.section_updated   { jobId, pageId, sectionId, version }
+site.published          { jobId, version, publishedAt }
+```
+
+Both filtered to: the assignee, all TEAM_LEAD/ADMIN, and (for cross-staff
+collaboration later) any other staff currently subscribed to the same job.
+
+---
+
+## 22. Job Export & Import
+
+**Status:** Not yet implemented. Required so staff can take a job off the
+cloud, work on it on their local machine (offline or in their preferred local
+tools), and re-import their changes when they're back online.
+
+### 22.1 The Bundle (ZIP)
+
+`GET /api/jobs/:id/export` streams a ZIP with this structure:
+
+```
+<jobNumber>.conddo-studio.zip
+├── manifest.json           ← spec below; the source of truth on import
+├── brief.md                ← human-readable rendering of the brief
+├── README.md               ← "what to do with this bundle" for the staff member
+├── site.json               ← snapshot of /jobs/:id/site (when builder exists)
+├── ai-suggestions.json     ← snapshot of job.ai_suggestions per section
+├── qa-history.json         ← every QA review with checklist + notes
+├── activity.json           ← full activity log
+└── assets/
+    ├── <assetId>--<filename>     ← every job asset downloaded from Cloudinary
+    └── …
+```
+
+Filenames in `/assets/` follow `<assetId>--<original_filename>` so re-import
+can map back to the existing asset row instead of duplicating.
+
+### 22.2 manifest.json
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "exportedAt": "2026-06-03T12:00:00Z",
+  "exportedBy": { "staffId": "uuid", "name": "Mercy Emmanuel", "email": "..." },
+  "job": {
+    "id": "uuid",
+    "jobNumber": "STU-2026-0042",
+    "version": 17,                 // job's optimistic-lock version at export
+    "title": "Lagos Cuts Barbershop",
+    "jobType": "WEBSITE_BUILD",
+    "status": "IN_PROGRESS",
+    "tenantId": "uuid",
+    "brief": { /* …full JSONB… */ }
+  },
+  "site": { "version": 4, "status": "DRAFT" },   // brief reference; full state in site.json
+  "assets": [
+    { "id": "uuid", "filename": "logo.png", "bytes": 41229, "sha256": "..." }
+  ],
+  "checksum": "sha256:<hex>"      // SHA-256 of every file in the zip except manifest.json itself
+}
+```
+
+`checksum` lets the server detect tampering on re-import.
+
+### 22.3 Import
+
+`POST /api/jobs/:id/import` (multipart, single `file` field — the ZIP).
+
+```
+multipart/form-data
+  file: <jobNumber>.conddo-studio.zip
+```
+
+Server pipeline:
+
+1. **Verify the bundle.** Recompute the checksum from the file tree and compare
+   to `manifest.checksum`. Reject with `422 BUNDLE_TAMPERED` on mismatch.
+2. **Verify the job matches.** `manifest.job.id` must equal the URL path
+   `:id`. Reject `422 JOB_MISMATCH`.
+3. **Verify the staff is the assignee** (or TEAM_LEAD/ADMIN). 403 otherwise.
+4. **Optimistic-lock check.** If `manifest.job.version` is older than the
+   current `Job.version`, return `409 STALE_BUNDLE` with the current version
+   so the client can offer "force overwrite" or "fetch newer and merge".
+5. **Apply, atomically (single transaction):**
+   - `brief` → overwrite `job.brief` JSONB
+   - `site.json` → `PUT /site` semantics (replace pages + sections + theme)
+   - `ai-suggestions.json` → merge into `job.ai_suggestions`
+   - Each file in `/assets/<assetId>--*`:
+     - If `assetId` exists on the job → re-upload to Cloudinary with same
+       `public_id` (overwrites), update `bytes`/`sha256`/`updated_at`
+     - If new → upload, create a new asset row
+   - Assets that exist on the job but are *missing* from the bundle are
+     **kept** (import is additive — to delete, use `DELETE /assets/:id`)
+6. **Increment `Job.version`** and append `JOB_IMPORTED` to the activity log
+   with `{ exportedAt, fileCount, assetCount }` in the detail field.
+7. Broadcast `job.imported` SSE event.
+
+Response:
+```
+200 { job: <JobDetail>, applied: { brief: true, site: true, assets: { updated: 4, created: 1 } } }
+```
+
+### 22.4 Endpoint Contracts
+
+```
+GET   /api/jobs/:id/export
+      Headers: Accept: application/zip
+      → 200 application/zip                       streams the bundle
+        Content-Disposition: attachment; filename="STU-2026-0042.conddo-studio.zip"
+      → 404 if job not found
+      → 403 if caller has no access to the job
+      Activity log: JOB_EXPORTED { exportedBy, bytes }
+
+POST  /api/jobs/:id/import   (multipart)
+      Body: file=<zip>
+      → 200 { job, applied }
+      → 409 STALE_BUNDLE      (manifest.job.version older than current)
+      → 422 BUNDLE_TAMPERED   (checksum mismatch)
+      → 422 JOB_MISMATCH      (manifest job id ≠ url id)
+      → 413 BUNDLE_TOO_LARGE  (max 256 MB by default — STUDIO_IMPORT_MAX_BYTES)
+```
+
+### 22.5 Limits & Safety
+
+```
+STUDIO_EXPORT_ASSET_INLINE_MAX_BYTES = 50 MB     (per-asset; larger ones are skipped
+                                                  with a manifest note and a
+                                                  refreshable Cloudinary link)
+STUDIO_IMPORT_MAX_BYTES              = 256 MB    (whole bundle)
+```
+
+- Exports stream — never buffer the whole zip in memory.
+- `assets/` files are pulled from Cloudinary's private URL on the server side,
+  not via redirect — so the bundle works offline.
+- Cloudinary's `public_id` for each asset is preserved across export/import,
+  so re-uploading overwrites in place (no orphaned uploads, no URL changes).
+
+---
+
+## 23. Implementation Rules for Agents
 
 Read these before writing any code. These rules are non-negotiable.
 
