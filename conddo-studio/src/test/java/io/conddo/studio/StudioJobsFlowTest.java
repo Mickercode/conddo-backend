@@ -202,6 +202,16 @@ class StudioJobsFlowTest {
                 .andExpect(jsonPath("$.data.unread").value(1))
                 .andExpect(jsonPath("$.data.items[0].type").value("QA_REVISION"));
 
+        // Bulk-mark all as read (notifications drawer "mark all read") drops the unread count.
+        mockMvc.perform(patch("/api/jobs/notifications/read-all")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.updated").value(1));
+        mockMvc.perform(get("/api/jobs/notifications").param("unread", "true")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.unread").value(0));
+
         // Developer fixes + resubmits; QA approves.
         mockMvc.perform(patch("/api/jobs/" + jobId + "/start").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
                 .andExpect(status().isOk());

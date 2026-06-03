@@ -38,4 +38,10 @@ public class StudioNotificationService {
         notification.markRead();
         repository.save(notification);
     }
+
+    /** Mark every unread notification for a staff member as read. Returns how many were updated. */
+    @Transactional
+    public int markAllRead(UUID staffId) {
+        return repository.markAllRead(staffId);
+    }
 }
