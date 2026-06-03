@@ -1,7 +1,9 @@
 package io.conddo.studio.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.conddo.studio.domain.DesignStandard;
 import io.conddo.studio.domain.Job;
+import io.conddo.studio.dsl.DesignStandardService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -57,10 +59,13 @@ public class AiAssistantService {
 
     private final ClaudeClient claude;
     private final ObjectMapper objectMapper;
+    private final DesignStandardService designStandards;
 
-    public AiAssistantService(ClaudeClient claude, ObjectMapper objectMapper) {
+    public AiAssistantService(ClaudeClient claude, ObjectMapper objectMapper,
+                              DesignStandardService designStandards) {
         this.claude = claude;
         this.objectMapper = objectMapper;
+        this.designStandards = designStandards;
     }
 
     // ── COPY GENERATOR ────────────────────────────────────────────────────────
@@ -68,8 +73,9 @@ public class AiAssistantService {
     /** Generates copy for one website section (HERO / SERVICES / ABOUT / …) from the brief. */
     public CopyResult generateSectionCopy(Map<String, Object> brief, String section) {
         String sec = section == null ? "" : section.trim().toUpperCase();
-        String system = SYSTEM_IDENTITY + "\n\n" + COPY_RULES + "\n\n"
-                + toneFor(brief) + "\n\n" + sectionInstructions(sec);
+        String system = layered(toneFor(brief),
+                standardsBlock("COPY_PATTERN", verticalOf(brief)),
+                sectionInstructions(sec));
         String user = buildCopyPrompt(brief, sec);
 
         Map<String, Object> copy = parse(claude.complete(system, user, 800, false));
@@ -78,9 +84,20 @@ public class AiAssistantService {
 
     // ── COLOUR PALETTE ────────────────────────────────────────────────────────
 
-    /** Generates a WCAG-AA-accessible palette from a primary hex colour. */
+    /** Generates a WCAG-AA-accessible palette from a primary hex colour (no vertical scoping). */
     public PaletteResult generatePalette(String primaryHex) {
-        String system = SYSTEM_IDENTITY + "\n\n" + COPY_RULES;
+        return generatePalette(primaryHex, null);
+    }
+
+    /**
+     * Generates a WCAG-AA-accessible palette from a primary hex colour, optionally
+     * grounded in the vertical's curated palette standards from the Design Standard
+     * Library (§8). When {@code vertical} is set, the prompt includes any active
+     * {@code PALETTE} standards for that vertical (plus globals) so Claude tilts
+     * toward the production team's house style.
+     */
+    public PaletteResult generatePalette(String primaryHex, String vertical) {
+        String system = layered(standardsBlock("PALETTE", vertical));
         String user = """
                 Generate a complete, accessible colour palette for a professional website using %s
                 as the primary colour.
@@ -154,7 +171,12 @@ public class AiAssistantService {
      */
     public QaScanResult scanSubmission(Job job) {
         Map<String, Object> brief = job.getBrief() == null ? Map.of() : job.getBrief();
-        String system = SYSTEM_IDENTITY + "\n\n" + COPY_RULES;
+        String vertical = verticalOf(brief);
+        // QA reads every relevant standard so it can flag drift from any axis.
+        String system = layered(
+                standardsBlock("COPY_PATTERN", vertical),
+                standardsBlock("LAYOUT", vertical),
+                standardsBlock("TYPOGRAPHY", vertical));
         String user = """
                 Review this Conddo.io website submission for %s (%s vertical).
 
@@ -184,9 +206,67 @@ public class AiAssistantService {
 
     // ── prompt helpers ─────────────────────────────────────────────────────────
 
+    /**
+     * Assemble the system prompt's static layers ({@link #SYSTEM_IDENTITY},
+     * {@link #COPY_RULES}) and any caller-supplied dynamic layers, dropping the
+     * empty ones so a vertical without DSL entries doesn't get a "Standards
+     * reference:" header followed by nothing.
+     */
+    private static String layered(String... dynamicLayers) {
+        StringBuilder sb = new StringBuilder(SYSTEM_IDENTITY).append("\n\n").append(COPY_RULES);
+        for (String layer : dynamicLayers) {
+            if (layer != null && !layer.isBlank()) {
+                sb.append("\n\n").append(layer);
+            }
+        }
+        return sb.toString();
+    }
+
     private String toneFor(Map<String, Object> brief) {
-        String vertical = str(brief, "vertical", "").toLowerCase().replace('-', '_');
-        return VERTICAL_TONES.getOrDefault(vertical, DEFAULT_TONE);
+        return VERTICAL_TONES.getOrDefault(verticalOf(brief), DEFAULT_TONE);
+    }
+
+    private static String verticalOf(Map<String, Object> brief) {
+        return str(brief == null ? Map.of() : brief, "vertical", "")
+                .toLowerCase()
+                .replace('-', '_');
+    }
+
+    /**
+     * Format active Design Standard Library entries of a {@code kind} for inclusion
+     * in a Claude prompt. Returns an empty string when nothing applies — callers
+     * append it conditionally via {@link #layered}.
+     */
+    private String standardsBlock(String kind, String vertical) {
+        List<DesignStandard> standards;
+        try {
+            standards = designStandards.forVertical(kind, vertical);
+        } catch (RuntimeException ex) {
+            // Same fail-safe contract as the AI itself — never let DSL retrieval break a generation.
+            log.warn("Could not load {} design standards for vertical={}: {}", kind, vertical, ex.getMessage());
+            return "";
+        }
+        if (standards.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("Standards reference (")
+                .append(kind.toLowerCase().replace('_', ' '))
+                .append(", curated by the production team — follow these unless the brief overrides):\n");
+        for (DesignStandard standard : standards) {
+            sb.append("- ").append(standard.getName());
+            if (standard.getDescription() != null && !standard.getDescription().isBlank()) {
+                sb.append(" — ").append(standard.getDescription());
+            }
+            if (!standard.getContent().isEmpty()) {
+                try {
+                    sb.append("\n    content: ").append(objectMapper.writeValueAsString(standard.getContent()));
+                } catch (Exception ignore) {
+                    // If the content can't be serialised, omit it — the name + description still help.
+                }
+            }
+            sb.append('\n');
+        }
+        return sb.toString().stripTrailing();
     }
 
     private static String sectionInstructions(String section) {

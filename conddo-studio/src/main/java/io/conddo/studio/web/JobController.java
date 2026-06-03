@@ -86,7 +86,7 @@ public class JobController {
     /** Generate an accessible colour palette from a primary hex (no job required). */
     @PostMapping("/ai/palette")
     public ApiResponse<AiAssistantService.PaletteResult> palette(@Valid @RequestBody PaletteRequest request) {
-        return ApiResponse.ok(jobService.aiPalette(request.primaryHex()));
+        return ApiResponse.ok(jobService.aiPalette(request.primaryHex(), request.vertical()));
     }
 
     /** Rank candidate images for a section using Claude vision. */

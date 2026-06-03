@@ -276,6 +276,11 @@ public class JobService {
         return aiAssistant.generatePalette(primaryHex);
     }
 
+    /** Palette grounded in the vertical's Design Standard Library entries. */
+    public AiAssistantService.PaletteResult aiPalette(String primaryHex, String vertical) {
+        return aiAssistant.generatePalette(primaryHex, vertical);
+    }
+
     /** Runs an AI QA scan over a job's brief + submission (read-only). */
     @Transactional(readOnly = true)
     public AiAssistantService.QaScanResult aiScan(UUID jobId) {
