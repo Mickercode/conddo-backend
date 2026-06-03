@@ -1,7 +1,7 @@
 
 # Frontend Status — handoff to backend
 
-**Updated:** 2026-06-03
+**Updated:** 2026-06-03 (post backend-handoff sync)
 **Owner of the FE codebases:** Mickercode (UI work coordinated via Claude Code)
 
 This is a living status doc. It tells the backend team:
@@ -14,6 +14,21 @@ This is a living status doc. It tells the backend team:
 
 If you change an endpoint contract, search this doc for the path and update the
 "FE call site" entry so the next person knows what to retest.
+
+### What changed since the last update
+
+| Delta | Commit | Status |
+|---|---|---|
+| **SSE wired** — singleton stream, replaces 30s polling, live job-board / QA-queue / admin-dashboard refresh, `notification.created` increments bell | conddo-studio `37cf235` | ✅ deployed |
+| **Job Types admin page** — `/admin/job-types`, full CRUD + SLA tuning + QA checklist editor, role-gated UI (ADMIN mutates, TEAM_LEAD reads) | conddo-studio `fb8aa40` | ✅ deployed |
+| **Platform Admin spec'd** — new §23 + Phase 13a/13b in `conddo_studio_combined.md`. Studio ADMIN gets cross-tenant management (tenants + tenant users). Backend not yet built. | backend `e1dca7d` | 📋 spec only |
+| **Operational note added** — `STUDIO_BASE_URL` + `STUDIO_SERVICE_TOKEN` must be set on `conddo-backend` Render service or signup → Studio job hand-off silently no-ops. Hit this in production. | backend `e1dca7d` | 📋 ops action |
+
+The new backend endpoints from the last handoff (SSE, Job Types CRUD,
+notification mark-all-read, performance recalc, email mirror) are now all
+consumed. **Design Standards CRUD** (also shipped backend-side) is the next
+FE slice — same shape as Job Types, just listing/editing palettes / layouts
+/ copy patterns / typography by vertical.
 
 ---
 
@@ -117,9 +132,12 @@ currently 404'ing starts returning a real session.
 
 ## 3. conddo-studio — endpoints consumed
 
-100% of the backend's 38 user-facing endpoints are wired to the FE client
-(only `/api/jobs/intake` — the service-to-service hand-off from conddo-api —
-is intentionally not consumed by the FE; it's called from conddo-api).
+**42 of 42 user-facing endpoints** wired to the FE client (only `/api/jobs/intake`
+— the service-to-service hand-off from conddo-api — is intentionally not
+consumed by the FE; it's called from conddo-api). The recent backend handoff
+shipped SSE, Job Types CRUD, Design Standards CRUD, and persistent
+performance — three of those four are wired below; Design Standards is the
+next FE slice.
 
 ### Auth (`/api/jobs/auth/**`)
 
@@ -166,6 +184,34 @@ is intentionally not consumed by the FE; it's called from conddo-api).
 | PATCH `/api/jobs/admin/{id}/reassign` | `lib/admin.ts` → `adminApi.reassign()` |
 | PATCH `/api/jobs/admin/{id}/extend-sla` | `lib/admin.ts` → `adminApi.extendSla()` |
 | PATCH `/api/jobs/admin/{id}/escalate` | `lib/admin.ts` → `adminApi.escalate()` |
+| GET `/api/jobs/admin/job-types` 🆕 | `lib/jobTypes.ts` → `jobTypesApi.list()` |
+| POST `/api/jobs/admin/job-types` 🆕 | `lib/jobTypes.ts` → `jobTypesApi.create()` |
+| PATCH `/api/jobs/admin/job-types/{id}` 🆕 | `lib/jobTypes.ts` → `jobTypesApi.update()` |
+| DELETE `/api/jobs/admin/job-types/{id}` 🆕 | `lib/jobTypes.ts` → `jobTypesApi.remove()` (soft-delete) |
+
+### Realtime (SSE)
+
+The single SSE stream below replaces the previous 30 s notification-bell poll
+**and** drives live job-board / QA-queue / admin-dashboard refreshes. One
+connection per browser tab; survives backgrounded tabs (openWhenHidden);
+auto-reconnects with backoff. Uses `@microsoft/fetch-event-source` because
+the browser's built-in `EventSource` can't carry the Bearer token.
+
+| Endpoint | FE call site |
+|---|---|
+| GET `/api/jobs/events` 🆕 | `lib/sse.ts` (singleton `StudioEventStream`) + `hooks/useStudioEvent.ts` |
+
+Subscribers (by event name):
+
+| Event | Where it's handled |
+|---|---|
+| `notification.created` | `components/app/NotificationsBell` (bumps unread count) + `app/notifications/page.tsx` (silent refetch) |
+| `job.created` / `job.claimed` | `app/jobs/page.tsx` (available) + `app/dashboard/page.tsx` (worker home) + admin dashboards |
+| `job.started` / `job.submitted` | `app/qa/page.tsx` (queue) + admin dashboards |
+| `job.approved` / `job.revision_requested` | `app/jobs/my-jobs/page.tsx` + `app/qa/page.tsx` + admin dashboards |
+| `job.reassigned` / `job.sla_extended` / `job.escalated` | `app/jobs/my-jobs` + admin dashboards |
+| `sla.tick` | `app/admin/page.tsx` (operations) — refetches the dashboard so SLA tone counts update without a page load |
+| `hello` / `heartbeat` | Ignored at FE; just keep the connection alive |
 
 ### Performance, Notifications, Assets
 
@@ -197,11 +243,18 @@ Mostly the same shape as conddo-app's, with these specific differences:
 
 ### Pending — backend work that unblocks already-shipped FE
 
-| Pending | FE state | Spec |
+| Pending (backend) | FE state | Spec |
 |---|---|---|
-| **SSE wire-up** (`GET /api/jobs/events`) | Backend SSE controller exists; FE is still polling for notifications + has no live job-board refresh. Will replace the 30 s notification-bell poll. Browser EventSource can't send Authorization headers — FE will use `@microsoft/fetch-event-source` polyfill once we wire it. | `conddo_studio_combined.md` §11 (existing) — no spec change needed |
 | **Website Builder API** (POST/PATCH/GET on `/jobs/:id/site/**`) | Builder route is a "coming soon" placeholder. AI section endpoints (`/ai-suggest`, `/palette`, `/rank-images`) are wired but no Section to write into yet. | `conddo_studio_combined.md` §21 — full design including V3 migration |
 | **Job Export / Import** (`GET /jobs/:id/export`, `POST /jobs/:id/import`) | No FE yet; will add a download button + import drop zone on job detail once endpoints exist. | `conddo_studio_combined.md` §22 — full design including manifest.json schema |
+| **Platform Admin — Cross-Tenant Management** (NEW: `GET/PATCH/DELETE /api/jobs/admin/platform/tenants/**` + `GET/PATCH/DELETE /api/jobs/admin/platform/users/**`) | Studio ADMIN today can only manage internal Handel Cores staff. We need to manage all platform tenants + users from the same Studio (you asked for this after a real-user signup post-mortem). | `conddo_studio_combined.md` §23 — full design with Phase 13a (read-only) + 13b (mutations) |
+
+### Pending — FE work against already-shipped backend endpoints
+
+| Pending (FE) | Backend ready? | Plan |
+|---|---|---|
+| Design Standards admin page (`/api/jobs/admin/design-standards/*`) | ✅ shipped in BACKEND_STATUS §2 | Mirror of the Job Types page — list/filter by kind+vertical, create/edit/soft-delete. Coming next slice. |
+| Wire `staff_performance` to /performance/me display | ✅ shipped (daily recalc cron) | Page already calls `/performance/me`; just confirm the numbers look right end-to-end after the first 02:00 UTC recalc. |
 
 ### What's NOT in the gap, but was nearly missed
 
@@ -217,23 +270,36 @@ In the order that gives the most FE win per backend hour:
 
 1. **Google Sign-in (conddo-api, `ACTION_LIST.md §1a`)** ⭐ unblocks a
    working "Continue with Google" on both /login and /onboarding/create-account.
-   FE is fully wired. Estimated backend effort: small (1 schema column, 2
-   endpoints, ID-token verification using `google-api-client`).
+   FE is fully wired (commit ddc2232) — buttons render + popup flow works, but
+   POST /auth/google currently 404s. Estimated backend effort: small (1 schema
+   column, 2 endpoints, ID-token verification using `google-api-client`).
 
-2. **Studio builder API (`conddo_studio_combined.md §21`)** ⭐ unblocks the
-   in-app website builder, which is currently an empty-state placeholder on
-   the Studio. Schema migration + endpoint surface. The AI assistant should
-   write directly into the new `site_sections.content` JSONB instead of the
-   existing `jobs.ai_suggestions` field.
+2. **Platform Admin — read-only first, then mutations** (`conddo_studio_combined.md §23`)
+   ⭐ requested after a real-user signup post-mortem. Studio ADMINs currently
+   can only manage internal Handel Cores staff (`studio.staff` table) — they
+   cannot see or modify tenants / tenant users. Two-phase delivery in the spec:
+   - **Phase 13a (read-only):** `V4__studio_platform_admin.sql` audit table +
+     `PlatformTenant` / `PlatformUser` mirror entities + GETs for tenants and
+     users (global search + per-tenant). The Studio FE will add `/admin/platform/*`
+     pages immediately after these land.
+   - **Phase 13b (mutations):** PATCH/DELETE on tenants + users, suspend semantics,
+     password reset, last-admin protection, refresh-token revocation, and new
+     SSE events (`platform.tenant_status_changed`, `platform.user_deactivated`).
 
-3. **Studio Export/Import (`conddo_studio_combined.md §22`)** ⭐ requested by
+3. **Studio Builder API** (`conddo_studio_combined.md §21`) ⭐ unblocks the
+   in-app website builder, currently an empty-state placeholder on the Studio.
+   Schema migration + endpoint surface. The AI assistant should write directly
+   into the new `site_sections.content` JSONB instead of the existing
+   `jobs.ai_suggestions` field.
+
+4. **Studio Export/Import** (`conddo_studio_combined.md §22`) ⭐ requested by
    ops staff so they can work locally. Two endpoints; needs a ZIP streamer
-   and Cloudinary server-side download. Independent of #2.
+   and Cloudinary server-side download. Independent of #3.
 
-4. **(In flight)** SLA monitor — the worktree on `phase1/studio-sla-monitor`
-   adds `SlaMonitorService` + scheduled escalations. The Studio FE already
-   subscribes to all the SSE events this would broadcast. No FE work needed
-   when this lands.
+5. **(In flight, already partially shipped)** SLA monitor — `phase1/studio-sla-monitor`
+   worktree adds the `@Scheduled` walk that emits `sla.tick`. The Studio FE
+   admin dashboard already subscribes to that event (commit 37cf235). No FE
+   work needed when this lands.
 
 ---
 
