@@ -41,6 +41,11 @@ studio:
   sla:
     amber-hours: ${STUDIO_SLA_AMBER_HOURS:24}
     red-hours: ${STUDIO_SLA_RED_HOURS:6}
+    # SlaMonitorService cadence (§7). Default: first scan 60s after boot, then
+    # every 5 min. Short enough to catch a breach within a tick, long enough not
+    # to hammer the DB. Set ms negative or remove @EnableScheduling to disable.
+    monitor-interval-ms: ${STUDIO_SLA_MONITOR_INTERVAL_MS:300000}
+    monitor-initial-delay-ms: ${STUDIO_SLA_MONITOR_INITIAL_DELAY_MS:60000}
   # Browser origins for the Studio frontend.
   #   allowed-origins         — exact origins (STUDIO_CORS_ALLOWED_ORIGINS), comma-separated.
   #   allowed-origin-patterns — wildcards (STUDIO_CORS_ALLOWED_ORIGIN_PATTERNS), e.g.
