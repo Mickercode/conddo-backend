@@ -12,4 +12,7 @@ public interface StaffRepository extends JpaRepository<Staff, UUID> {
     Optional<Staff> findByEmail(String email);
 
     List<Staff> findAllByOrderByFullName();
+
+    /** Active staff in a role — used to fan-out escalation emails to TEAM_LEAD / ADMIN. */
+    List<Staff> findByRoleAndActiveTrue(String role);
 }

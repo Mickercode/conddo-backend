@@ -77,6 +77,21 @@ studio:
       email: ${STUDIO_BOOTSTRAP_ADMIN_EMAIL:}
       password: ${STUDIO_BOOTSTRAP_ADMIN_PASSWORD:}
       name: ${STUDIO_BOOTSTRAP_ADMIN_NAME:Studio Admin}
+  # High-priority email mirror (§13.4 — Brevo). The Studio mirrors three
+  # in-app notifications to email so staff don't miss them: JobReassigned,
+  # JobRevisionRequested, JobEscalated (to TEAM_LEAD + ADMIN). Anything else
+  # is SSE-only to avoid noise.
+  #   provider=brevo    → BrevoStudioMailer becomes @Primary
+  #   anything else / unset → LoggingStudioMailer logs the message instead.
+  # api-key / from must both be set for emails to actually go out; otherwise
+  # the Brevo adapter logs once at startup and drops sends (lifecycle never breaks).
+  notifications:
+    email:
+      provider: ${STUDIO_EMAIL_PROVIDER:}
+      api-key: ${STUDIO_EMAIL_API_KEY:}
+      from: ${STUDIO_EMAIL_FROM:}
+      from-name: ${STUDIO_EMAIL_FROM_NAME:Conddo Studio}
+      base-url: ${STUDIO_EMAIL_BASE_URL:https://api.brevo.com}
 
 management:
   endpoints:
