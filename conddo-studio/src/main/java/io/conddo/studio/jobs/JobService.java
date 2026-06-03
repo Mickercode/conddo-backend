@@ -16,6 +16,8 @@ import io.conddo.studio.repository.JobTypeRepository;
 import io.conddo.studio.repository.QaReviewRepository;
 import io.conddo.studio.repository.StaffNotificationRepository;
 import io.conddo.studio.repository.StaffRepository;
+import io.conddo.studio.sse.JobLifecycleEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,8 +32,11 @@ import java.util.UUID;
 /**
  * The Studio job pipeline (Infrastructure §12/§13): create, claim, start, submit,
  * QA review, and admin operations over the {@link Job} state machine. Internal
- * staff only (no tenant RLS). SLA tone (GREEN/AMBER/RED) is derived at read time;
- * scheduled SLA escalation, SSE, and AI are deferred.
+ * staff only (no tenant RLS). SLA tone (GREEN/AMBER/RED) is derived at read time.
+ *
+ * <p>Each transition publishes a {@link JobLifecycleEvent} so {@code SseService}
+ * (and any future listeners) can react after the DB commit lands — see §13.4.
+ * Scheduled SLA escalation is deferred to {@code SlaMonitorService}.
  */
 @Service
 public class JobService {
@@ -53,13 +58,14 @@ public class JobService {
     private final JdbcTemplate jdbcTemplate;
     private final StudioProperties properties;
     private final AiAssistantService aiAssistant;
+    private final ApplicationEventPublisher events;
     private final Clock clock = Clock.systemUTC();
 
     public JobService(JobRepository jobRepository, JobTypeRepository jobTypeRepository,
                       JobActivityRepository activityRepository, QaReviewRepository qaReviewRepository,
                       StaffRepository staffRepository, StaffNotificationRepository notifications,
                       JdbcTemplate jdbcTemplate, StudioProperties properties,
-                      AiAssistantService aiAssistant) {
+                      AiAssistantService aiAssistant, ApplicationEventPublisher events) {
         this.jobRepository = jobRepository;
         this.jobTypeRepository = jobTypeRepository;
         this.activityRepository = activityRepository;
@@ -69,6 +75,7 @@ public class JobService {
         this.jdbcTemplate = jdbcTemplate;
         this.properties = properties;
         this.aiAssistant = aiAssistant;
+        this.events = events;
     }
 
     // ----- creation (admin / future auto-create on signup) --------------------
@@ -82,6 +89,8 @@ public class JobService {
                 "AVAILABLE", now.plusHours(type.getSlaHours()));
         job = jobRepository.save(job);
         log(job.getId(), null, "JOB_CREATED", "Job created");
+        events.publishEvent(new JobLifecycleEvent.JobCreated(job.getId(), job.getJobNumber(),
+                job.getJobTypeId(), job.getStatus(), slaTone(job)));
         return job;
     }
 
@@ -122,7 +131,10 @@ public class JobService {
         }
         job.claim(staffId, OffsetDateTime.now(clock));
         log(jobId, staffId, "JOB_CLAIMED", null);
-        return jobRepository.save(job);
+        Job saved = jobRepository.save(job);
+        events.publishEvent(new JobLifecycleEvent.JobClaimed(saved.getId(), saved.getJobNumber(),
+                saved.getJobTypeId(), staffId));
+        return saved;
     }
 
     @Transactional
@@ -133,7 +145,9 @@ public class JobService {
         }
         job.start(OffsetDateTime.now(clock));
         log(jobId, staffId, "JOB_STARTED", null);
-        return jobRepository.save(job);
+        Job saved = jobRepository.save(job);
+        events.publishEvent(new JobLifecycleEvent.JobStarted(saved.getId(), saved.getJobNumber(), staffId));
+        return saved;
     }
 
     @Transactional
@@ -144,7 +158,10 @@ public class JobService {
         }
         job.submit(OffsetDateTime.now(clock), studioUrl);
         log(jobId, staffId, "JOB_SUBMITTED", notes);
-        return jobRepository.save(job);
+        Job saved = jobRepository.save(job);
+        events.publishEvent(new JobLifecycleEvent.JobSubmitted(saved.getId(), saved.getJobNumber(),
+                saved.getJobTypeId(), staffId));
+        return saved;
     }
 
     // ----- QA -----------------------------------------------------------------
@@ -171,7 +188,12 @@ public class JobService {
         qaReviewRepository.save(new QaReview(jobId, reviewerId, "APPROVED", checklist, null, positiveNotes));
         job.approve(OffsetDateTime.now(clock));
         log(jobId, reviewerId, "QA_APPROVED", null);
-        return jobRepository.save(job);
+        Job saved = jobRepository.save(job);
+        if (saved.getAssignedTo() != null) {
+            events.publishEvent(new JobLifecycleEvent.JobApproved(saved.getId(), saved.getJobNumber(),
+                    saved.getAssignedTo()));
+        }
+        return saved;
     }
 
     @Transactional
@@ -181,8 +203,13 @@ public class JobService {
         job.returnForRevision();
         log(jobId, reviewerId, "QA_RETURNED", feedback);
         notifyStaff(job.getAssignedTo(), "QA_REVISION", "Revision requested",
-                job.getJobNumber() + " was returned for revision", jobId);
-        return jobRepository.save(job);
+                job.getJobNumber() + " was returned for revision", jobId, job.getJobNumber());
+        Job saved = jobRepository.save(job);
+        if (saved.getAssignedTo() != null) {
+            events.publishEvent(new JobLifecycleEvent.JobRevisionRequested(saved.getId(), saved.getJobNumber(),
+                    saved.getAssignedTo(), feedback));
+        }
+        return saved;
     }
 
     // ----- admin --------------------------------------------------------------
@@ -199,8 +226,10 @@ public class JobService {
         job.reassign(newStaffId, OffsetDateTime.now(clock));
         log(jobId, newStaffId, "JOB_REASSIGNED", null);
         notifyStaff(newStaffId, "JOB_ASSIGNED", "New job assigned",
-                "You were assigned " + job.getJobNumber(), jobId);
-        return jobRepository.save(job);
+                "You were assigned " + job.getJobNumber(), jobId, job.getJobNumber());
+        Job saved = jobRepository.save(job);
+        events.publishEvent(new JobLifecycleEvent.JobReassigned(saved.getId(), saved.getJobNumber(), newStaffId));
+        return saved;
     }
 
     @Transactional
@@ -211,7 +240,10 @@ public class JobService {
         Job job = require(jobId);
         job.extendSla(hours);
         log(jobId, null, "SLA_EXTENDED", "+" + hours + "h: " + (reason == null ? "" : reason));
-        return jobRepository.save(job);
+        Job saved = jobRepository.save(job);
+        events.publishEvent(new JobLifecycleEvent.JobSlaExtended(saved.getId(), saved.getJobNumber(),
+                hours, saved.getAssignedTo()));
+        return saved;
     }
 
     @Transactional
@@ -219,7 +251,9 @@ public class JobService {
         Job job = require(jobId);
         job.escalate();
         log(jobId, null, "JOB_ESCALATED", reason);
-        return jobRepository.save(job);
+        Job saved = jobRepository.save(job);
+        events.publishEvent(new JobLifecycleEvent.JobEscalated(saved.getId(), saved.getJobNumber(), reason));
+        return saved;
     }
 
     // ----- AI assistant (§8) --------------------------------------------------
@@ -299,10 +333,13 @@ public class JobService {
         activityRepository.save(new JobActivity(jobId, staffId, action, detail));
     }
 
-    private void notifyStaff(UUID staffId, String type, String title, String message, UUID jobId) {
-        if (staffId != null) {
-            notifications.save(new StaffNotification(staffId, type, title, message, jobId));
+    private void notifyStaff(UUID staffId, String type, String title, String message, UUID jobId, String jobNumber) {
+        if (staffId == null) {
+            return;
         }
+        StaffNotification saved = notifications.save(new StaffNotification(staffId, type, title, message, jobId));
+        events.publishEvent(new JobLifecycleEvent.NotificationCreated(jobId, jobNumber, staffId,
+                saved.getId(), type, title, message));
     }
 
     private Job require(UUID id) {

@@ -40,4 +40,14 @@ public class NotificationController {
         notifications.markRead(id, StudioPrincipal.staffId(jwt));
         return ResponseEntity.noContent().build();
     }
+
+    /** Bulk-mark every unread notification as read. Returns {@code {updated: N}}. */
+    @PatchMapping("/read-all")
+    public ApiResponse<MarkAllResponse> markAllRead(@AuthenticationPrincipal Jwt jwt) {
+        int updated = notifications.markAllRead(StudioPrincipal.staffId(jwt));
+        return ApiResponse.ok(new MarkAllResponse(updated));
+    }
+
+    public record MarkAllResponse(int updated) {
+    }
 }
