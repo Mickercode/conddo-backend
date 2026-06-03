@@ -64,6 +64,13 @@
             <version>2.27.0</version>
         </dependency>
 
+        <!-- Cloudinary — CDN-backed asset storage for job deliverables -->
+        <dependency>
+            <groupId>com.cloudinary</groupId>
+            <artifactId>cloudinary-http44</artifactId>
+            <version>1.39.0</version>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.conddo.studio.ai.ClaudeClient;
 import io.conddo.studio.auth.StudioServiceTokenFilter;
+import io.conddo.studio.storage.ObjectStorage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +15,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -30,7 +32,9 @@ import java.sql.SQLException;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -93,6 +97,36 @@ class StudioJobsFlowTest {
                 @Override
                 public boolean isConfigured() {
                     return true;
+                }
+            };
+        }
+    }
+
+    /**
+     * In-memory object storage so the asset endpoints can be exercised end-to-end
+     * without a live Cloudinary. {@code @Primary} overrides the real adapter.
+     */
+    @TestConfiguration
+    static class StorageTestConfig {
+        @Bean
+        @Primary
+        ObjectStorage inMemoryObjectStorage() {
+            return new ObjectStorage() {
+                private final java.util.Map<String, byte[]> store = new java.util.concurrent.ConcurrentHashMap<>();
+
+                @Override
+                public Stored put(String key, String contentType, long size, java.io.InputStream data) {
+                    try {
+                        store.put(key, data.readAllBytes());
+                    } catch (java.io.IOException e) {
+                        throw new io.conddo.studio.storage.StorageException("read failed", e);
+                    }
+                    return new Stored(key, "http://test-storage/" + key);
+                }
+
+                @Override
+                public void delete(String id) {
+                    store.remove(id);
                 }
             };
         }
@@ -276,6 +310,63 @@ class StudioJobsFlowTest {
 
         mockMvc.perform(get("/api/jobs/qa/" + jobId + "/scan").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void jobAssetsUploadListAndDelete() throws Exception {
+        // Admin creates a website-build job; dev claims so it doesn't pollute the lifecycle test.
+        String adminToken = login(ADMIN);
+        MvcResult created = mockMvc.perform(post("/api/jobs/admin/jobs").header(HttpHeaders.AUTHORIZATION, bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "jobTypeId", "WEBSITE_BUILD", "title", "Website Build — Assets test",
+                                "brief", Map.of("businessName", "AssetsCo", "vertical", "fashion")))))
+                .andExpect(status().isCreated()).andReturn();
+        String jobId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+
+        String devToken = login(DEV);
+        mockMvc.perform(post("/api/jobs/" + jobId + "/claim").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk());
+
+        // Upload an image deliverable.
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "design-v1.png", "image/png", new byte[]{1, 2, 3, 4, 5, 6, 7, 8});
+        MvcResult uploaded = mockMvc.perform(multipart("/api/jobs/" + jobId + "/assets").file(file)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.id").exists())
+                .andExpect(jsonPath("$.data.fileName").value("design-v1.png"))
+                .andExpect(jsonPath("$.data.mimeType").value("image/png"))
+                .andExpect(jsonPath("$.data.sizeBytes").value(8))
+                .andExpect(jsonPath("$.data.url").exists())
+                .andReturn();
+        String assetId = objectMapper.readTree(uploaded.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+
+        // It shows in the job's assets list AND on the full detail.
+        mockMvc.perform(get("/api/jobs/" + jobId + "/assets").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].id").value(assetId));
+        mockMvc.perform(get("/api/jobs/" + jobId).header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.assets[0].id").value(assetId));
+
+        // Bad type → 400 (BAD_REQUEST via IllegalArgumentException).
+        MockMultipartFile bad = new MockMultipartFile(
+                "file", "app.exe", "application/octet-stream", new byte[]{9, 9});
+        mockMvc.perform(multipart("/api/jobs/" + jobId + "/assets").file(bad)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isBadRequest());
+
+        // Delete removes it.
+        mockMvc.perform(delete("/api/jobs/" + jobId + "/assets/" + assetId)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(get("/api/jobs/" + jobId + "/assets").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
     }
 
     @Test

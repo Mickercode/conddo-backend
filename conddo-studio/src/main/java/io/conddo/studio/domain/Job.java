@@ -201,6 +201,11 @@ public class Job {
         return assets;
     }
 
+    /** Replaces the full assets array. Used by {@code AssetService} on upload/delete. */
+    public void setAssets(List<Map<String, Object>> assets) {
+        this.assets = assets == null ? List.of() : assets;
+    }
+
     public String getStatus() {
         return status;
     }

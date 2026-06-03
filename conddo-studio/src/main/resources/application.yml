@@ -25,6 +25,12 @@ spring:
     create-schemas: true
     locations: classpath:db/migration
 
+  # Asset upload limits (§9). Keep max-file-size aligned with studio.assets.max-bytes.
+  servlet:
+    multipart:
+      max-file-size: ${STUDIO_ASSETS_MAX_FILE_SIZE:10MB}
+      max-request-size: ${STUDIO_ASSETS_MAX_REQUEST_SIZE:12MB}
+
 studio:
   # Internal staff JWT — HMAC (HS256), separate from the platform's RSA token.
   jwt:
@@ -55,6 +61,14 @@ studio:
     claude:
       api-key: ${CLAUDE_API_KEY:}
       model: ${CLAUDE_MODEL:claude-sonnet-4-6}
+  # Asset storage (§9) — Cloudinary. Reuses the platform's CLOUDINARY_URL by default
+  # (Cloudinary public_ids are prefixed studio/jobs/... so they don't collide with
+  # the platform's tenant media). Blank → asset uploads return 502.
+  cloudinary:
+    url: ${CLOUDINARY_URL:}
+  # Server-side defensive cap on asset size; multipart limit above is the front line.
+  assets:
+    max-bytes: ${STUDIO_ASSETS_MAX_BYTES:10485760}   # 10 MB
   # First-admin bootstrap — see StudioAdminBootstrap. Only used on an empty
   # studio.staff table; safe to leave set across restarts. Clear after first login
   # and rotate the password from the Staff page.
