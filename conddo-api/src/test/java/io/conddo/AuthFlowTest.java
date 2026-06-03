@@ -146,6 +146,31 @@ class AuthFlowTest {
     }
 
     /**
+     * Recording stub for the Studio job-intake gateway. Returns empty (so existing
+     * website-change-request tests still see {@code PENDING}); exposes the last
+     * call's args so the tenant-activated auto-create flow can be asserted.
+     */
+    @TestConfiguration
+    static class StudioGatewayTestConfig {
+        static volatile java.util.UUID lastTenantId;
+        static volatile String lastJobType;
+        static volatile String lastTitle;
+        static volatile java.util.Map<String, Object> lastBrief;
+
+        @Bean
+        @Primary
+        io.conddo.core.studio.StudioJobGateway recordingStudioJobGateway() {
+            return (tenantId, jobType, title, brief) -> {
+                lastTenantId = tenantId;
+                lastJobType = jobType;
+                lastTitle = title;
+                lastBrief = brief;
+                return java.util.Optional.empty();
+            };
+        }
+    }
+
+    /**
      * Seeds a SUPER_ADMIN into the internal {@code staff_users} table (no tenant),
      * as the owner role. Runs per test but is idempotent — there is intentionally
      * no API to create platform staff.
@@ -1398,6 +1423,46 @@ class AuthFlowTest {
                 .andExpect(status().isNoContent());
         mockMvc.perform(get("/api/v1/media/" + mediaId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void tenantSignupAutoCreatesStudioJobWithResolvedWebsiteType() throws Exception {
+        // Fashion + starter → LANDING_PAGE (a simple single-page site).
+        StudioGatewayTestConfig.lastBrief = null;
+        mockMvc.perform(post("/api/v1/tenants").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Glam Co", "slug", "auto-glam",
+                                "verticalId", "fashion", "planId", "starter",
+                                "adminEmail", "owner@auto-glam.test", "adminPassword", PASSWORD))))
+                .andExpect(status().isCreated());
+
+        assertNotNull(StudioGatewayTestConfig.lastBrief,
+                "TenantActivationListener should have called the Studio gateway");
+        assertEquals("WEBSITE_BUILD", StudioGatewayTestConfig.lastJobType);
+        assertEquals("Website Build — Glam Co", StudioGatewayTestConfig.lastTitle);
+        assertEquals("LANDING_PAGE", StudioGatewayTestConfig.lastBrief.get("websiteType"));
+        assertEquals("fashion", StudioGatewayTestConfig.lastBrief.get("vertical"));
+        assertEquals("starter", StudioGatewayTestConfig.lastBrief.get("plan"));
+        assertEquals("tenant-activated", StudioGatewayTestConfig.lastBrief.get("source"));
+        assertTrue(((java.util.List<?>) StudioGatewayTestConfig.lastBrief.get("recommendedSections"))
+                .contains("hero"));
+
+        // Beauty/wellness routes to BOOKING_FOCUSED regardless of plan.
+        StudioGatewayTestConfig.lastBrief = null;
+        mockMvc.perform(post("/api/v1/tenants").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Bella Spa", "slug", "auto-bella",
+                                "verticalId", "beauty-and-wellness", "planId", "business",
+                                "adminEmail", "owner@auto-bella.test", "adminPassword", PASSWORD))))
+                .andExpect(status().isCreated());
+        assertEquals("BOOKING_FOCUSED", StudioGatewayTestConfig.lastBrief.get("websiteType"));
+
+        // Pro retail routes to ECOMMERCE.
+        StudioGatewayTestConfig.lastBrief = null;
+        mockMvc.perform(post("/api/v1/tenants").contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Mega Mart", "slug", "auto-mart",
+                                "verticalId", "retail", "planId", "pro",
+                                "adminEmail", "owner@auto-mart.test", "adminPassword", PASSWORD))))
+                .andExpect(status().isCreated());
+        assertEquals("ECOMMERCE", StudioGatewayTestConfig.lastBrief.get("websiteType"));
     }
 
     // ----- helpers ---------------------------------------------------------

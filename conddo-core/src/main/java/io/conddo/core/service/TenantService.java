@@ -7,8 +7,10 @@ import io.conddo.core.domain.Tenant;
 import io.conddo.core.domain.User;
 import io.conddo.core.repository.TenantRepository;
 import io.conddo.core.repository.UserRepository;
+import io.conddo.core.signup.TenantActivatedEvent;
 import io.conddo.core.tenant.TenantContext;
 import io.conddo.core.tenant.TenantSession;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,13 +29,16 @@ public class TenantService {
     private final UserRepository userRepository;
     private final TenantSession tenantSession;
     private final PasswordHasher passwordHasher;
+    private final ApplicationEventPublisher events;
 
     public TenantService(TenantRepository tenantRepository, UserRepository userRepository,
-                         TenantSession tenantSession, PasswordHasher passwordHasher) {
+                         TenantSession tenantSession, PasswordHasher passwordHasher,
+                         ApplicationEventPublisher events) {
         this.tenantRepository = tenantRepository;
         this.userRepository = userRepository;
         this.tenantSession = tenantSession;
         this.passwordHasher = passwordHasher;
+        this.events = events;
     }
 
     /**
@@ -50,6 +55,7 @@ public class TenantService {
         }
         Tenant tenant = tenantRepository.save(new Tenant(name, slug, verticalId, planId));
         persistAdmin(tenant, adminEmail, passwordHasher.hash(adminPassword), adminFullName, null, false);
+        events.publishEvent(new TenantActivatedEvent(tenant.getId()));
         return tenant;
     }
 
@@ -66,6 +72,7 @@ public class TenantService {
         Tenant tenant = tenantRepository.save(
                 new Tenant(businessName, uniqueSlug(businessName), verticalId, planId));
         User admin = persistAdmin(tenant, adminEmail, adminPasswordHash, adminFullName, adminPhone, true);
+        events.publishEvent(new TenantActivatedEvent(tenant.getId()));
         return new Provisioned(tenant, admin);
     }
 
