@@ -8,6 +8,7 @@ import io.conddo.studio.web.dto.AiSuggestRequest;
 import io.conddo.studio.web.dto.JobCard;
 import io.conddo.studio.web.dto.JobDetailResponse;
 import io.conddo.studio.web.dto.PaletteRequest;
+import io.conddo.studio.web.dto.RankImagesRequest;
 import io.conddo.studio.web.dto.SubmitJobRequest;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -86,5 +87,12 @@ public class JobController {
     @PostMapping("/ai/palette")
     public ApiResponse<AiAssistantService.PaletteResult> palette(@Valid @RequestBody PaletteRequest request) {
         return ApiResponse.ok(jobService.aiPalette(request.primaryHex()));
+    }
+
+    /** Rank candidate images for a section using Claude vision. */
+    @PostMapping("/{id}/rank-images")
+    public ApiResponse<AiAssistantService.RankResult> rankImages(@PathVariable UUID id,
+                                                                 @Valid @RequestBody RankImagesRequest request) {
+        return ApiResponse.ok(jobService.aiRankImages(id, request.imageUrls(), request.sectionType()));
     }
 }

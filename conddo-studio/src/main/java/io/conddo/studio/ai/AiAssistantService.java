@@ -6,6 +6,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -94,6 +97,51 @@ public class AiAssistantService {
 
         Map<String, Object> palette = parse(claude.complete(system, user, 400, false));
         return new PaletteResult(palette != null, palette == null ? Map.of() : palette);
+    }
+
+    // ── IMAGE RANKER ──────────────────────────────────────────────────────────
+
+    /**
+     * Rates a list of candidate images for use on a {@code vertical} website's
+     * {@code sectionType}, returning them sorted by score desc. Each call uses
+     * Claude vision; a failed call yields a zero-score "AI unavailable" entry —
+     * the request itself still succeeds.
+     */
+    public RankResult rankImages(List<String> imageUrls, String vertical, String sectionType) {
+        if (imageUrls == null || imageUrls.isEmpty()) {
+            return new RankResult(true, List.of());
+        }
+        String system = SYSTEM_IDENTITY + "\n\n" + COPY_RULES;
+        String ranker = """
+                Rate this image for use on a %s business website in the %s section.
+
+                Score 1-10 where:
+                10 = perfect, professional, clearly shows the business
+                5  = acceptable but not ideal
+                1  = blurry, irrelevant, or poor quality
+
+                Return JSON only:
+                {"score": number, "reason": string, "recommendation": "RECOMMENDED|ACCEPTABLE|REJECT"}""".formatted(
+                vertical == null ? "general" : vertical,
+                sectionType == null ? "hero" : sectionType);
+
+        List<RankedImage> ranked = new ArrayList<>();
+        int succeeded = 0;
+        for (String url : imageUrls) {
+            Map<String, Object> parsed = parse(claude.completeWithImage(system, ranker, url, 250));
+            if (parsed != null) {
+                succeeded++;
+                Object scoreVal = parsed.getOrDefault("score", 0);
+                int score = scoreVal instanceof Number n ? n.intValue() : 0;
+                ranked.add(new RankedImage(url, score,
+                        String.valueOf(parsed.getOrDefault("reason", "")),
+                        String.valueOf(parsed.getOrDefault("recommendation", "ACCEPTABLE"))));
+            } else {
+                ranked.add(new RankedImage(url, 0, "AI unavailable", "REJECT"));
+            }
+        }
+        ranked.sort(Comparator.comparingInt(RankedImage::score).reversed());
+        return new RankResult(succeeded > 0, ranked);
     }
 
     // ── QA SCANNER ────────────────────────────────────────────────────────────
@@ -220,5 +268,13 @@ public class AiAssistantService {
 
     /** A QA scan: issues / suggestions / positives / overallQuality (under {@code scan}). */
     public record QaScanResult(boolean available, Map<String, Object> scan) {
+    }
+
+    /** A scored image candidate for a website section. */
+    public record RankedImage(String url, int score, String reason, String recommendation) {
+    }
+
+    /** Image-ranking result, sorted by score desc. {@code available=false} if every call failed. */
+    public record RankResult(boolean available, List<RankedImage> ranked) {
     }
 }

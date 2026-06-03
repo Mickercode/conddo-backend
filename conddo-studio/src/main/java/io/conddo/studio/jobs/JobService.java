@@ -248,6 +248,16 @@ public class JobService {
         return aiAssistant.scanSubmission(require(jobId));
     }
 
+    /** Ranks candidate images for a section using the job's vertical. */
+    @Transactional(readOnly = true)
+    public AiAssistantService.RankResult aiRankImages(UUID jobId, List<String> imageUrls, String sectionType) {
+        Job job = require(jobId);
+        Object vertical = job.getBrief() == null ? null : job.getBrief().get("vertical");
+        return aiAssistant.rankImages(imageUrls,
+                vertical == null ? "general" : vertical.toString(),
+                sectionType == null || sectionType.isBlank() ? "hero" : sectionType);
+    }
+
     // ----- performance --------------------------------------------------------
 
     @Transactional(readOnly = true)

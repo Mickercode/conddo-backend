@@ -2,8 +2,11 @@ package io.conddo.studio.ai;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.anthropic.models.messages.ContentBlockParam;
+import com.anthropic.models.messages.ImageBlockParam;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.TextBlockParam;
 import com.anthropic.models.messages.ThinkingConfigAdaptive;
 import io.conddo.studio.config.StudioProperties;
 import org.slf4j.Logger;
@@ -11,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -71,6 +75,35 @@ public class AnthropicClaudeClient implements ClaudeClient {
         } catch (RuntimeException ex) {
             // §20 AI rule: log, never fail the request.
             log.error("Claude completion failed: {}", ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public Optional<String> completeWithImage(String systemPrompt, String userPrompt,
+                                              String imageUrl, int maxTokens) {
+        if (client == null) {
+            return Optional.empty();
+        }
+        try {
+            ContentBlockParam imageBlock = ContentBlockParam.ofImage(
+                    ImageBlockParam.builder().urlSource(imageUrl).build());
+            ContentBlockParam textBlock = ContentBlockParam.ofText(
+                    TextBlockParam.builder().text(userPrompt).build());
+            MessageCreateParams params = MessageCreateParams.builder()
+                    .model(model)
+                    .maxTokens((long) maxTokens)
+                    .system(systemPrompt)
+                    .addUserMessageOfBlockParams(List.of(imageBlock, textBlock))
+                    .build();
+            Message response = client.messages().create(params);
+            String text = response.content().stream()
+                    .flatMap(block -> block.text().stream())
+                    .map(t -> t.text())
+                    .collect(Collectors.joining());
+            return text.isBlank() ? Optional.empty() : Optional.of(text);
+        } catch (RuntimeException ex) {
+            log.error("Claude vision call failed: {}", ex.getMessage());
             return Optional.empty();
         }
     }

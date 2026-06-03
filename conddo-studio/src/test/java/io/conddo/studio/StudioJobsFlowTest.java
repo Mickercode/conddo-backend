@@ -91,7 +91,8 @@ class StudioJobsFlowTest {
                     return Optional.of("{\"headline\":\"Genuine medicines, always in stock\","
                             + "\"subheadline\":\"Your trusted Lekki pharmacy\",\"ctaText\":\"Order now\","
                             + "\"primary\":\"#7C5CBF\",\"background\":\"#FFFFFF\","
-                            + "\"issues\":[],\"positives\":[\"Clean layout\"],\"overallQuality\":\"PASS\"}");
+                            + "\"issues\":[],\"positives\":[\"Clean layout\"],\"overallQuality\":\"PASS\","
+                            + "\"score\":9,\"reason\":\"Bright, clear product shot\",\"recommendation\":\"RECOMMENDED\"}");
                 }
 
                 @Override
@@ -310,6 +311,18 @@ class StudioJobsFlowTest {
 
         mockMvc.perform(get("/api/jobs/qa/" + jobId + "/scan").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
                 .andExpect(status().isForbidden());
+
+        // Image ranker — vertical pulled from the job's brief, returns sorted ranked list.
+        mockMvc.perform(post("/api/jobs/" + jobId + "/rank-images").header(HttpHeaders.AUTHORIZATION, bearer(devToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "imageUrls", java.util.List.of("https://stock/x.png", "https://stock/y.png"),
+                                "sectionType", "hero"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.available").value(true))
+                .andExpect(jsonPath("$.data.ranked.length()").value(2))
+                .andExpect(jsonPath("$.data.ranked[0].score").value(9))
+                .andExpect(jsonPath("$.data.ranked[0].recommendation").value("RECOMMENDED"));
     }
 
     @Test

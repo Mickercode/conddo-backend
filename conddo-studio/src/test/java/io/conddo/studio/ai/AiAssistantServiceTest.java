@@ -5,6 +5,7 @@ import io.conddo.studio.domain.Job;
 import org.junit.jupiter.api.Test;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -86,5 +87,38 @@ class AiAssistantServiceTest {
         AiAssistantService.CopyResult result = service.generateSectionCopy(Map.of(), "HERO");
 
         assertFalse(result.available());
+    }
+
+    @Test
+    void rankImagesSortsByScoreAndDropsToZeroOnFailure() {
+        // Two different vision responses for two different URLs.
+        when(claude.completeWithImage(anyString(), anyString(), eq("https://a/img.png"), anyInt()))
+                .thenReturn(Optional.of(
+                        "{\"score\":4,\"reason\":\"Blurry\",\"recommendation\":\"ACCEPTABLE\"}"));
+        when(claude.completeWithImage(anyString(), anyString(), eq("https://b/img.png"), anyInt()))
+                .thenReturn(Optional.of(
+                        "{\"score\":9,\"reason\":\"Crisp brand shot\",\"recommendation\":\"RECOMMENDED\"}"));
+        // One that fails — should still appear, last, score 0.
+        when(claude.completeWithImage(anyString(), anyString(), eq("https://c/img.png"), anyInt()))
+                .thenReturn(Optional.empty());
+
+        AiAssistantService.RankResult result = service.rankImages(
+                List.of("https://a/img.png", "https://b/img.png", "https://c/img.png"),
+                "pharmacy", "hero");
+
+        assertTrue(result.available());   // at least one succeeded
+        assertEquals(3, result.ranked().size());
+        assertEquals("https://b/img.png", result.ranked().get(0).url());   // highest
+        assertEquals(9, result.ranked().get(0).score());
+        assertEquals("https://c/img.png", result.ranked().get(2).url());   // failed → last
+        assertEquals(0, result.ranked().get(2).score());
+        assertEquals("REJECT", result.ranked().get(2).recommendation());
+    }
+
+    @Test
+    void rankImagesEmptyListIsAvailableNoCalls() {
+        AiAssistantService.RankResult result = service.rankImages(List.of(), "pharmacy", "hero");
+        assertTrue(result.available());
+        assertTrue(result.ranked().isEmpty());
     }
 }

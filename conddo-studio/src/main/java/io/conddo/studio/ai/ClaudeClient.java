@@ -20,6 +20,19 @@ public interface ClaudeClient {
      */
     Optional<String> complete(String systemPrompt, String userPrompt, int maxTokens, boolean think);
 
+    /**
+     * Vision-enabled completion: pass an {@code imageUrl} and a text prompt — Claude
+     * sees the image and answers. Same fail-safe contract as {@link #complete}.
+     *
+     * <p>Default falls back to a text-only call with the URL appended so test stubs
+     * keep working without overriding. Production adapter overrides to use the
+     * SDK's image content block (genuine vision).
+     */
+    default Optional<String> completeWithImage(String systemPrompt, String userPrompt,
+                                               String imageUrl, int maxTokens) {
+        return complete(systemPrompt, userPrompt + "\n\nImage URL: " + imageUrl, maxTokens, false);
+    }
+
     /** Whether a Claude API key is configured (the assistant is live). */
     boolean isConfigured();
 }
