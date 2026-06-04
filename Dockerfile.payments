@@ -1,30 +1,32 @@
 # ----------------------------- build stage -----------------------------
-# Builds the runnable conddo-studio jar (the internal Jobs Board service).
-# Tests are NOT run here (Testcontainers needs a Docker daemon); CI runs them.
+# Builds the runnable conddo-payments jar (the standalone payments service
+# wrapping RoutePay). Tests are NOT run here (Testcontainers needs a Docker
+# daemon); CI runs them. Mirrors Dockerfile.studio so Render can build all
+# three services off the same monorepo with per-service dockerfilePath.
 FROM eclipse-temurin:17-jdk-jammy AS build
 WORKDIR /workspace
 
 # Module descriptors + wrapper first, so dependency download is cached across
 # source-only changes. All module poms are copied so the reactor resolves the
-# parent's <modules> list even though we build only conddo-studio.
+# parent's <modules> list even though we build only conddo-payments.
 COPY .mvn/ .mvn/
 COPY mvnw pom.xml ./
 COPY conddo-core/pom.xml conddo-core/pom.xml
 COPY conddo-api/pom.xml conddo-api/pom.xml
 COPY conddo-studio/pom.xml conddo-studio/pom.xml
 COPY conddo-payments/pom.xml conddo-payments/pom.xml
-RUN chmod +x mvnw && ./mvnw -B -pl conddo-studio dependency:go-offline -DskipTests || true
+RUN chmod +x mvnw && ./mvnw -B -pl conddo-payments dependency:go-offline -DskipTests || true
 
-# Sources, then build only the studio module.
-COPY conddo-studio/src conddo-studio/src
-RUN ./mvnw -B -pl conddo-studio clean package -DskipTests
+# Sources, then build only the payments module.
+COPY conddo-payments/src conddo-payments/src
+RUN ./mvnw -B -pl conddo-payments clean package -DskipTests
 
 # ----------------------------- run stage -------------------------------
 FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
-COPY --from=build /workspace/conddo-studio/target/conddo-studio-*.jar app.jar
+COPY --from=build /workspace/conddo-payments/target/conddo-payments-*.jar app.jar
 
 # Respect the container's memory limit; the platform injects PORT.
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0"
-EXPOSE 8083
+EXPOSE 8084
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

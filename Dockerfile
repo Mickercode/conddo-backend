@@ -13,6 +13,7 @@ COPY mvnw pom.xml ./
 COPY conddo-core/pom.xml conddo-core/pom.xml
 COPY conddo-api/pom.xml conddo-api/pom.xml
 COPY conddo-studio/pom.xml conddo-studio/pom.xml
+COPY conddo-payments/pom.xml conddo-payments/pom.xml
 RUN chmod +x mvnw && ./mvnw -B -pl conddo-api -am dependency:go-offline -DskipTests || true
 
 # Sources, then build. (.dockerignore keeps target/ and the dev JWT keys out of

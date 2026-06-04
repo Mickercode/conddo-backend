@@ -138,6 +138,14 @@ studio:
   base-url: ${STUDIO_BASE_URL:}
   service-token: ${STUDIO_SERVICE_TOKEN:}
 
+# Service-to-service link to conddo-payments (ACTION_LIST §7a). Same shape as
+# the Studio one above: TenantActivationListener calls payments to provision
+# the RoutePay sub-account on signup. Both values blank → the hand-off is a
+# no-op (signup still succeeds; provisioning runs manually later).
+payments:
+  base-url: ${PAYMENTS_BASE_URL:}
+  service-token: ${PAYMENTS_SERVICE_TOKEN:}
+
 server:
   # Honour the platform-provided PORT (Render/Heroku) first, then our own var.
   port: ${PORT:${CONDDO_API_PORT:8080}}

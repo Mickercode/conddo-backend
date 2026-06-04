@@ -2,6 +2,7 @@ package io.conddo.api.signup;
 
 import io.conddo.core.common.NotFoundException;
 import io.conddo.core.domain.Tenant;
+import io.conddo.core.payments.PaymentsGateway;
 import io.conddo.core.repository.TenantRepository;
 import io.conddo.core.signup.TenantActivatedEvent;
 import io.conddo.core.signup.WebsiteTypeRecommendation;
@@ -36,13 +37,16 @@ public class TenantActivationListener {
     private final TenantRepository tenantRepository;
     private final WebsiteTypeResolver websiteTypeResolver;
     private final StudioJobGateway studioJobGateway;
+    private final PaymentsGateway paymentsGateway;
 
     public TenantActivationListener(TenantRepository tenantRepository,
                                     WebsiteTypeResolver websiteTypeResolver,
-                                    StudioJobGateway studioJobGateway) {
+                                    StudioJobGateway studioJobGateway,
+                                    PaymentsGateway paymentsGateway) {
         this.tenantRepository = tenantRepository;
         this.websiteTypeResolver = websiteTypeResolver;
         this.studioJobGateway = studioJobGateway;
+        this.paymentsGateway = paymentsGateway;
     }
 
     @Async
@@ -64,6 +68,31 @@ public class TenantActivationListener {
         } catch (RuntimeException ex) {
             // Signup is already committed — never let a downstream failure surface.
             log.error("Auto-create Studio job failed for tenant {}: {}", event.tenantId(), ex.getMessage());
+        }
+    }
+
+    /**
+     * Second handler on the same event (§7a): provision the tenant's RoutePay
+     * sub-account through conddo-payments. Separate listener method so a Studio
+     * outage doesn't suppress payments provisioning and vice versa — each
+     * gateway is independently fail-safe.
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public void onTenantActivated_provisionPayments(TenantActivatedEvent event) {
+        try {
+            Tenant tenant = tenantRepository.findById(event.tenantId())
+                    .orElseThrow(() -> new NotFoundException("Tenant " + event.tenantId() + " vanished"));
+            String contactEmail = tenant.getContactEmail() == null
+                    ? "owner+" + tenant.getSlug() + "@conddo.io"
+                    : tenant.getContactEmail();
+            paymentsGateway.provisionTenantAccount(tenant.getId(), tenant.getSlug(),
+                            tenant.getName(), contactEmail)
+                    .ifPresent(account -> log.info("Provisioned payments sub-account for tenant {} — {} ({})",
+                            tenant.getId(), account.subaccountId(), account.status()));
+        } catch (RuntimeException ex) {
+            log.error("Auto-provision payments failed for tenant {}: {}", event.tenantId(), ex.getMessage());
         }
     }
 
