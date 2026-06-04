@@ -2,11 +2,14 @@ package io.conddo.studio.web;
 
 import io.conddo.studio.common.ApiError;
 import io.conddo.studio.common.ApiResponse;
+import io.conddo.studio.common.BundleTamperedException;
 import io.conddo.studio.common.ConflictException;
 import io.conddo.studio.common.HomePageRequiredException;
 import io.conddo.studio.common.InvalidCredentialsException;
+import io.conddo.studio.common.JobMismatchException;
 import io.conddo.studio.common.LastAdminProtectedException;
 import io.conddo.studio.common.NotFoundException;
+import io.conddo.studio.common.StaleBundleException;
 import io.conddo.studio.common.VersionMismatchException;
 import io.conddo.studio.storage.StorageException;
 import org.springframework.http.HttpStatus;
@@ -81,6 +84,28 @@ public class StudioExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.fail(ApiError.of("VERSION_MISMATCH",
                         "Concurrent edit detected — refetch the site and retry")));
+    }
+
+    // ----- Import/Export (§22) ------------------------------------------------
+
+    @ExceptionHandler(BundleTamperedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleBundleTampered(BundleTamperedException ex) {
+        return ResponseEntity.unprocessableEntity()
+                .body(ApiResponse.fail(ApiError.of("BUNDLE_TAMPERED", ex.getMessage())));
+    }
+
+    @ExceptionHandler(JobMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleJobMismatch(JobMismatchException ex) {
+        return ResponseEntity.unprocessableEntity()
+                .body(ApiResponse.fail(ApiError.of("JOB_MISMATCH", ex.getMessage())));
+    }
+
+    @ExceptionHandler(StaleBundleException.class)
+    public ResponseEntity<ApiResponse<Void>> handleStaleBundle(StaleBundleException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("STALE_BUNDLE", ex.getMessage(),
+                        List.of(new ApiError.FieldError("bundleVersion", String.valueOf(ex.getBundleVersion())),
+                                new ApiError.FieldError("serverVersion", String.valueOf(ex.getServerVersion()))))));
     }
 
     @ExceptionHandler(InvalidCredentialsException.class)

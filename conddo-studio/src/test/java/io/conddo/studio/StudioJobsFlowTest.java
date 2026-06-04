@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -41,6 +42,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -865,6 +867,134 @@ class StudioJobsFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("PUBLISHED"))
                 .andExpect(jsonPath("$.data.publishedAt").exists());
+    }
+
+    /**
+     * §22 Export + Import: streams a checksummed ZIP; import verifies checksum,
+     * job-id match, and applies brief + ai-suggestions back.
+     */
+    @Test
+    void jobExportImportRoundtripAndIntegrityGuards() throws Exception {
+        String adminToken = login(ADMIN);
+        MvcResult created = mockMvc.perform(post("/api/jobs/admin/jobs").header(HttpHeaders.AUTHORIZATION, bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "jobTypeId", "WEBSITE_BUILD", "title", "Export Test",
+                                "brief", Map.of("businessName", "Export Co", "vertical", "fashion")))))
+                .andExpect(status().isCreated()).andReturn();
+        String jobId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+
+        String devToken = login(DEV);
+        mockMvc.perform(post("/api/jobs/" + jobId + "/claim").header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk());
+
+        // 1. Export returns a ZIP with the right content-type and disposition headers.
+        MvcResult exportResult = mockMvc.perform(get("/api/jobs/" + jobId + "/export")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/zip"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
+                        org.hamcrest.Matchers.containsString(".conddo-studio.zip")))
+                .andExpect(header().exists("X-Bundle-Checksum"))
+                .andReturn();
+        byte[] zipBytes = exportResult.getResponse().getContentAsByteArray();
+        assertTrue(zipBytes.length > 0, "bundle should not be empty");
+        Map<String, byte[]> bundleFiles = readZipBytes(zipBytes);
+        byte[] manifestBytes = bundleFiles.get("manifest.json");
+        org.junit.jupiter.api.Assertions.assertNotNull(manifestBytes,
+                "bundle must contain manifest.json");
+        com.fasterxml.jackson.databind.JsonNode manifest = objectMapper.readTree(manifestBytes);
+        assertEquals(1, manifest.path("schemaVersion").asInt());
+        assertEquals(jobId, manifest.path("job").path("id").asText());
+        assertTrue(manifest.path("checksum").asText().startsWith("sha256:"));
+        org.junit.jupiter.api.Assertions.assertNotNull(bundleFiles.get("brief.md"));
+        org.junit.jupiter.api.Assertions.assertNotNull(bundleFiles.get("README.md"));
+
+        // 2. Round-trip import succeeds.
+        MockMultipartFile file = new MockMultipartFile("file", "round.zip", "application/zip", zipBytes);
+        mockMvc.perform(multipart("/api/jobs/" + jobId + "/import").file(file)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.jobId").value(jobId));
+
+        // 3. Wrong job id → 422 JOB_MISMATCH.
+        MvcResult otherCreated = mockMvc.perform(post("/api/jobs/admin/jobs").header(HttpHeaders.AUTHORIZATION, bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "jobTypeId", "WEBSITE_BUILD", "title", "Other Job",
+                                "brief", Map.of("businessName", "Other Co")))))
+                .andExpect(status().isCreated()).andReturn();
+        String otherJobId = objectMapper.readTree(otherCreated.getResponse().getContentAsString())
+                .path("data").path("id").asText();
+        MockMultipartFile mismatched = new MockMultipartFile("file", "mismatch.zip", "application/zip", zipBytes);
+        mockMvc.perform(multipart("/api/jobs/" + otherJobId + "/import").file(mismatched)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("JOB_MISMATCH"));
+
+        // 4. Tampered bundle → 422 BUNDLE_TAMPERED.
+        byte[] tampered = corruptBundle(zipBytes);
+        MockMultipartFile bad = new MockMultipartFile("file", "tampered.zip", "application/zip", tampered);
+        mockMvc.perform(multipart("/api/jobs/" + jobId + "/import").file(bad)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("BUNDLE_TAMPERED"));
+
+        // 5. Missing manifest → 422 BUNDLE_TAMPERED.
+        byte[] noManifest = buildBundleWithoutManifest();
+        MockMultipartFile missing = new MockMultipartFile("file", "no-manifest.zip", "application/zip", noManifest);
+        mockMvc.perform(multipart("/api/jobs/" + jobId + "/import").file(missing)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(devToken)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("BUNDLE_TAMPERED"));
+    }
+
+    /** Read every entry of a ZIP into a name→bytes map for assertions. */
+    private static Map<String, byte[]> readZipBytes(byte[] zipBytes) throws java.io.IOException {
+        Map<String, byte[]> out = new java.util.LinkedHashMap<>();
+        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                new java.io.ByteArrayInputStream(zipBytes))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                zis.transferTo(bo);
+                out.put(entry.getName(), bo.toByteArray());
+            }
+        }
+        return out;
+    }
+
+    /** Flip the brief.md bytes so the checksum no longer matches. */
+    private static byte[] corruptBundle(byte[] zipBytes) throws java.io.IOException {
+        Map<String, byte[]> files = readZipBytes(zipBytes);
+        byte[] brief = files.get("brief.md");
+        if (brief != null && brief.length > 0) {
+            brief[0] ^= (byte) 0xFF;
+        }
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(out)) {
+            for (Map.Entry<String, byte[]> e : files.entrySet()) {
+                zos.putNextEntry(new java.util.zip.ZipEntry(e.getKey()));
+                zos.write(e.getValue());
+                zos.closeEntry();
+            }
+        }
+        return out.toByteArray();
+    }
+
+    /** Build a zip with just brief.md — no manifest. */
+    private static byte[] buildBundleWithoutManifest() throws java.io.IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(out)) {
+            zos.putNextEntry(new java.util.zip.ZipEntry("brief.md"));
+            zos.write("# fake".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zos.closeEntry();
+        }
+        return out.toByteArray();
     }
 
     @Test

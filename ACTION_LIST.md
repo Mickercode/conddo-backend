@@ -495,72 +495,15 @@ a valid session — never touching a password.
 
 ### 7a. Payments — `conddo-payments` standalone web service  ⬜ TODO (P0 for V1 launch)
 
-**Two key corrections (2026-06-04, supersedes the older "Pattern B" text below):**
+**Architecture decision (2026-06-04, clarified):** Payments is its **own
+standalone web service** (own deployment, own URL, own Postgres schema).
+Same shape as `conddo-studio`:
 
-1. **Standalone deployment with its own URL.** Payments is its own Spring
-   Boot service like conddo-studio is. The FE talks to it DIRECTLY at
-   `NEXT_PUBLIC_PAYMENTS_API_URL` (NOT via a conddo-api proxy). Both
-   services trust the same JWT issuer + public key, so the same Bearer
-   works on both. Reads (`/payments/summary`, `/transactions`,
-   `/outstanding`, `/reminders`) stay on conddo-api because they
-   aggregate over orders + customers in the tenant DB; writes
-   (`/payments/init`, `/payments/{ref}/verify`) go to the new service.
-2. **Per-tenant RoutePay sub-accounts** — each tenant gets their own
-   sub-account on RoutePay at signup; customer payments land there;
-   RoutePay settles directly to the tenant's bank. Conddo's revenue
-   comes from RoutePay's split-payment feature (small flat % per plan
-   tier — defines our take-rate model). We never hold customer funds,
-   never run a settlement ledger.
-
-```sql
--- Goes in V1__payments_schema.sql, BEFORE the main payments.payments table:
-CREATE TABLE payments.tenant_accounts (
-    tenant_id                 UUID PRIMARY KEY,
-    tenant_slug               TEXT NOT NULL,
-    routepay_subaccount_id    TEXT NOT NULL UNIQUE,
-    business_name             TEXT NOT NULL,
-    contact_email             TEXT NOT NULL,
-    settlement_bank_name      TEXT,
-    settlement_bank_account   TEXT,
-    settlement_account_holder TEXT,
-    status                    TEXT NOT NULL DEFAULT 'DEPOSIT_PENDING'
-                                CHECK (status IN ('DEPOSIT_PENDING','ACTIVE','SUSPENDED')),
-    created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
-
-**Signup hook:** add a second `@Async @TransactionalEventListener(AFTER_COMMIT)`
-on `TenantActivationListener` (alongside the existing Studio job-intake
-listener). It POSTs to `conddo-payments` at `/api/payments/internal/tenants`
-with `{tenantId, businessName, contactEmail}` to provision the sub-account.
-Failure logged, never thrown — signup must not depend on payments being up.
-Manual recovery: POST the same payload to the service-token-gated endpoint.
-
-When the tenant later adds bank details in Settings → Payments, status flips
-`DEPOSIT_PENDING → ACTIVE` and they can start accepting payments. Until then,
-the sub-account exists but cannot pay out — the FE shows a banner asking for
-bank details before exposing Pay buttons.
-
-**FE env var:** `NEXT_PUBLIC_PAYMENTS_API_URL=https://conddo-payments.onrender.com`.
-Already shipped on conddo-app main (16f9c8d) — Pay buttons render a clean
-"Payments are being set up" empty state until the URL stops 404'ing.
-
----
-
-#### Legacy "Pattern B" spec below (historical context only — DO NOT IMPLEMENT)
-
-The Pattern B (platform-merchant float) text below was the original spec
-before the per-tenant-sub-account correction. Kept for reference so the
-trade-offs are visible. **The sub-account model above is what gets built.**
-
-### 7a-legacy. Payments — older Pattern B spec (do not implement)
-
-**Architecture decision (2026-06-04):** Payments is its own deployable service
-— **not** bolted into `conddo-api`. Same shape as `conddo-studio`:
-
-- Separate Spring Boot module (`conddo-payments`), separate Render service,
-  separate Postgres schema (`payments.*` — owned by `conddo_owner` role).
+- Separate Spring Boot module (`conddo-payments`), separate Render web service
+  at `https://conddo-payments.onrender.com` (URL becomes the new
+  `NEXT_PUBLIC_PAYMENTS_API_URL` on the FE).
+- Separate Postgres schema (`payments.*`) — owned by `conddo_owner` role,
+  same Postgres instance.
 - Communicates with `conddo-api` over HTTP with a shared service token
   (`X-Payments-Service-Token`), mirroring the `conddo-api ↔ conddo-studio`
   seam already in place for the website-build hand-off.
@@ -579,21 +522,52 @@ trade-offs are visible. **The sub-account model above is what gets built.**
 - **Webhook surface area.** RoutePay's webhook posts directly to the
   payments service URL — no funnel through `conddo-api`.
 
-#### Architecture: platform-merchant for V1 (Pattern B)
+#### Architecture: tenant-sub-account model (Pattern A')
 
-Two patterns:
+Each tenant gets their own **RoutePay sub-account** at signup time. Customer
+payments land in that sub-account → RoutePay settles directly to the tenant's
+bank. Conddo never holds the float; we just orchestrate.
 
-| Pattern | Tenant gets paid by | Conddo holds | Risk |
-|---|---|---|---|
-| **A — Tenant-merchant** | Customer pays directly into tenant's bank | nothing — passes through | Each tenant signs up for their own RoutePay account; we hold their client_id/secret encrypted |
-| **B — Platform-merchant (V1)** | Customer pays Conddo; Conddo settles to tenant weekly/monthly | Float of unsettled funds | Conddo takes on PSSP-adjacent ops; simpler integration; needs settlement engine |
+| | Approach |
+|---|---|
+| **Each tenant** | Has a RoutePay sub-account, created by our platform RoutePay account at signup. Sub-account ID + (optionally) split-bank-account stored on the tenant row in `payments` schema. |
+| **Conddo** | Holds the platform-level RoutePay credentials. Uses RoutePay's sub-account API to provision per-tenant accounts and to route customer payments to the correct sub-account on init. |
+| **Customer payments** | Land in the tenant's sub-account → settled by RoutePay to the tenant's bank on RoutePay's normal schedule. |
+| **Conddo's cut** | RoutePay's split-payment feature takes a configurable % from each transaction → routed to Conddo's main account. (Defines our take-rate model — currently planned as a small flat % per plan tier.) |
 
-**V1 decision: Pattern B.** Faster to ship, single RoutePay credential set,
-matches what most Nigerian SME platforms do (Bumpa, Selar). Settlement is
-manual ops for the first 100 tenants; automation lands in V1.5.
+This is significantly better than the "platform-merchant float" pattern:
+- We never hold customer funds → less regulatory exposure, no float ops.
+- Tenants are paid by RoutePay directly → clear money trail.
+- Conddo's revenue comes from the split → automated, transparent.
+- Each tenant has an audit trail of their own sub-account → easy ops support.
 
-Revisit Pattern A when: a Pro tier wants direct-settlement, or regulation
-requires no float.
+#### Signup → RoutePay sub-account creation
+
+When a tenant signs up, the existing `TenantActivatedEvent`
+(AFTER_COMMIT, `@Async` in `conddo-api`) gets a second handler in addition
+to the Studio job hand-off:
+
+```java
+@Async
+@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+public void onTenantActivated_provisionPayments(TenantActivatedEvent event) {
+    // 1. Pull tenant from repo.
+    // 2. Call conddo-payments POST /api/payments/internal/tenants
+    //    with {tenantId, businessName, contactEmail, settlementBankAccount?}.
+    //    Service token in X-Payments-Service-Token.
+    // 3. conddo-payments uses its cached RoutePay token to call RoutePay's
+    //    sub-account-create endpoint, persists the returned sub-account ID
+    //    on the payments.tenant_accounts row.
+    // 4. Failure logged, never thrown — signup must not depend on payments
+    //    being up. Manual recovery is POST /api/payments/internal/tenants
+    //    with the same payload.
+}
+```
+
+If the tenant skips the bank-account step at signup (we likely don't ask
+upfront), the sub-account is created in "deposit-pending" mode and we prompt
+the tenant to add bank details in Settings → Payments before they take their
+first payment. The sub-account exists, just can't pay out yet.
 
 #### Service layout
 
@@ -637,6 +611,24 @@ backend/                          (this repo)
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS payments;
+
+-- Per-tenant RoutePay sub-account. One row per tenant the moment the
+-- TenantActivated listener provisions it.
+CREATE TABLE payments.tenant_accounts (
+    tenant_id                 UUID PRIMARY KEY,            -- platform's tenants.id
+    tenant_slug               TEXT NOT NULL,
+    routepay_subaccount_id    TEXT NOT NULL UNIQUE,        -- RoutePay's sub-account id
+    business_name             TEXT NOT NULL,
+    contact_email             TEXT NOT NULL,
+    settlement_bank_name      TEXT,                         -- optional at signup; updated from Settings → Payments
+    settlement_bank_account   TEXT,                         -- masked at read time
+    settlement_account_holder TEXT,
+    status                    TEXT NOT NULL DEFAULT 'DEPOSIT_PENDING'
+                                CHECK (status IN ('DEPOSIT_PENDING','ACTIVE','SUSPENDED')),
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_tenant_accounts_status ON payments.tenant_accounts(status);
 
 CREATE TABLE payments.payments (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -733,20 +725,29 @@ POST /api/payments/webhook
     5. Return 200 always (so RoutePay doesn't retry on transient errors).
 ```
 
-#### Frontend never calls conddo-payments directly
+#### Frontend calls conddo-payments directly (separate base URL)
 
-The Conddo-app frontend talks to `conddo-api` only. `conddo-api` is the
-proxy/gateway in front of `conddo-payments`. The FE sees:
+The Conddo-app FE talks to `conddo-payments` **directly** — not via a
+proxy through `conddo-api`. It gets a different env var
+(`NEXT_PUBLIC_PAYMENTS_API_URL`), same pattern as `NEXT_PUBLIC_STUDIO_API_URL`
+which is already in place for the Studio FE.
 
 ```
-POST /api/v1/payments/init        →  conddo-api proxies to conddo-payments
-GET  /api/v1/payments/{ref}/verify→  conddo-api proxies to conddo-payments
+NEXT_PUBLIC_API_URL=https://conddo-backend.onrender.com         # tenant API
+NEXT_PUBLIC_PAYMENTS_API_URL=https://conddo-payments.onrender.com  # payments
+NEXT_PUBLIC_STUDIO_API_URL=https://conddo-studio.onrender.com    # studio (FE separate)
 ```
 
-Same response shapes as the §7a contract above. The FE has zero awareness
-of the second service. This also means the FE can ship immediately against
-the spec — when the payments service is wired into conddo-api as a gateway,
-the FE buttons just start working.
+The FE's `lib/api/payments.ts` keeps the existing **read** endpoints
+(`/payments/summary`, `/payments/transactions`, `/payments/outstanding`,
+`/payments/reminders`) on `conddo-api` — those aggregate over orders +
+customers (RLS-scoped, joins tenant data). The new **write** endpoints
+(`/payments/init`, `/payments/{ref}/verify`) go to `conddo-payments` at the
+new URL.
+
+Auth: the tenant access token (JWT issued by `conddo-api`) is accepted by
+`conddo-payments` because both share the issuer + public key. Same Bearer
+header, different service. No re-login.
 
 #### Environment variables
 

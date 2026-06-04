@@ -25,11 +25,14 @@ spring:
     create-schemas: true
     locations: classpath:db/migration
 
-  # Asset upload limits (§9). Keep max-file-size aligned with studio.assets.max-bytes.
+  # Multipart limits — asset uploads (§9) cap at 10 MB; import bundles (§22)
+  # can be much larger, so the multipart envelope defaults to the spec's
+  # STUDIO_IMPORT_MAX_BYTES (256 MB). Per-asset upload size is enforced
+  # separately inside AssetService against studio.assets.max-bytes.
   servlet:
     multipart:
-      max-file-size: ${STUDIO_ASSETS_MAX_FILE_SIZE:10MB}
-      max-request-size: ${STUDIO_ASSETS_MAX_REQUEST_SIZE:12MB}
+      max-file-size: ${STUDIO_IMPORT_MAX_FILE_SIZE:256MB}
+      max-request-size: ${STUDIO_IMPORT_MAX_REQUEST_SIZE:256MB}
 
 studio:
   # Internal staff JWT — HMAC (HS256), separate from the platform's RSA token.
