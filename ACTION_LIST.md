@@ -346,30 +346,34 @@ credentials on the same identity. Signing in via either issues the same session.
 
 ```
 POST /auth/google                                      Sign in with Google
-  Body: { idToken: string, tenantSlug: string }
+  Body: { idToken: string, tenantSlug?: string }        # tenantSlug NOW OPTIONAL
   Behaviour:
     1. Verify idToken (issuer https://accounts.google.com, aud == client_id,
        exp not past, sig OK against JWKS).
-    2. Look up user by (tenantSlug, google_sub).
-       - Match → success path (5).
-    3. If no google_sub match, look up by (tenantSlug, email == idToken.email)
-       AND idToken.email_verified == true.
-       - Match → first time signing in with Google: link the account (set
-         google_sub, google_email, google_linked_at), then success path.
-    4. No match → 404 USER_NOT_FOUND.
-    5. Issue the same LoginResponse as /auth/login (access token in body,
+    2. Resolve candidate users:
+         a. If tenantSlug provided → look up (tenantSlug, google_sub or
+            verified email). 0 → 404, 1 → log in, >1 impossible (PK).
+         b. If tenantSlug omitted → look up by google_sub or verified email
+            ACROSS tenants. 0 → 404, 1 → log in, >1 → 409 AMBIGUOUS_TENANT
+            with the list of matching tenants so the FE can prompt the user
+            to pick one (then resubmits with tenantSlug).
+    3. First-time link: when matching by verified email rather than
+       google_sub, write the google_sub/google_email/google_linked_at fields.
+    4. Issue the same LoginResponse as /auth/login (access token in body,
        refresh cookie via Set-Cookie). Audit log: LOGIN_SUCCESS, method=google.
   Responses:
     200 LoginResponse                              (signed in, possibly linked)
     400 { code: "GOOGLE_ID_TOKEN_INVALID" }        (verify failed)
     400 { code: "GOOGLE_EMAIL_UNVERIFIED" }        (idToken.email_verified=false)
-    404 { code: "USER_NOT_FOUND" }                 (no user for that tenant+identity)
-    423 { code: "AUTH_ACCOUNT_LOCKED" }            (LockoutPolicy still applies — Google
-                                                    failures count toward the same counter)
+    404 { code: "USER_NOT_FOUND" }                 (no user with that Google email)
+    409 { code: "AMBIGUOUS_TENANT",
+          details: { tenants: [{slug, name}, ...] } } (multiple workspaces match
+                                                       this Google account)
+    423 { code: "AUTH_ACCOUNT_LOCKED" }
 
 
 POST /auth/register/start-google                       Start signup with Google
-  Body: { idToken: string, phone: string }
+  Body: { idToken: string, phone?: string }             # phone NOW OPTIONAL
   Behaviour:
     1. Verify idToken (same as above).
     2. Reject if idToken.email is already used by any user in any tenant
@@ -377,17 +381,24 @@ POST /auth/register/start-google                       Start signup with Google
     3. Create a registration record with:
          - email      ← idToken.email (must be email_verified)
          - fullName   ← idToken.name (fallback: idToken.given_name + family_name)
-         - phone      ← request.phone (Google can't be trusted for this — Nigerian
-                        SMS verification is non-negotiable)
+         - phone      ← request.phone if provided; otherwise NULL (the FE then
+                        collects + verifies phone at the next step via the
+                        existing /auth/register/resend → /verify flow).
          - password   ← random 64-char (the user authenticates via Google going
                         forward; we still set a password so /auth/forgot-password
                         works if they later want it)
          - googleSub  ← idToken.sub (stored on the registration row; copied to
                         users.google_sub at /complete time)
-    4. Issue an OTP to phone (existing /auth/register/start otp pipeline).
-    5. Return same RegisterStartResponse as /auth/register/start.
+    4. If phone provided → issue an OTP via the existing pipeline.
+       If phone omitted → no OTP yet; return registrationId with a flag
+       phoneRequired:true so the FE knows to collect phone before /verify.
+    5. /auth/register/resend now also accepts a {registrationId, phone}
+       body — when the registration row has no phone yet, the resend acts
+       as "set phone + issue first OTP". Existing callers (phone-provided
+       at start) keep working since the body is treated as a no-op when
+       phone is already present.
   Responses:
-    200 { registrationId, resendCooldownSeconds }
+    200 { registrationId, resendCooldownSeconds, phoneRequired?: boolean }
     400 { code: "GOOGLE_ID_TOKEN_INVALID" }
     400 { code: "GOOGLE_EMAIL_UNVERIFIED" }
     409 { code: "USER_ALREADY_EXISTS" }
