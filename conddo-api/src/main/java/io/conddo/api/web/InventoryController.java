@@ -52,9 +52,11 @@ public class InventoryController {
             @RequestParam(required = false) String search,
             @RequestParam(required = false) UUID category,
             @RequestParam(required = false, defaultValue = "false") boolean lowStock,
+            @RequestParam(required = false) Integer expiringWithinDays,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Page<ProductView> result = inventoryService.list(search, category, lowStock, PageRequest.of(page, size));
+        Page<ProductView> result = inventoryService.list(search, category, lowStock, expiringWithinDays,
+                PageRequest.of(page, size));
         List<ProductRow> rows = result.getContent().stream().map(ProductRow::from).toList();
         return ApiResponse.ok(rows, ApiResponse.Meta.page(
                 result.getNumber(), result.getSize(), result.getTotalElements()));
@@ -64,7 +66,8 @@ public class InventoryController {
     @PreAuthorize(WRITE)
     public ResponseEntity<ApiResponse<ProductRow>> create(@Valid @RequestBody CreateProductRequest request) {
         ProductView created = inventoryService.create(request.name(), request.sku(), request.categoryId(),
-                request.price(), orZero(request.stock()), orZero(request.reorderThreshold()), request.active());
+                request.price(), orZero(request.stock()), orZero(request.reorderThreshold()), request.active(),
+                request.expiryDate(), request.batchNumber());
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(ProductRow.from(created)));
     }
 
@@ -97,7 +100,8 @@ public class InventoryController {
     @PreAuthorize(WRITE)
     public ApiResponse<ProductRow> update(@PathVariable UUID id, @RequestBody UpdateProductRequest request) {
         return ApiResponse.ok(ProductRow.from(inventoryService.update(id, request.name(), request.sku(),
-                request.categoryId(), request.price(), request.stock(), request.reorderThreshold(), request.active())));
+                request.categoryId(), request.price(), request.stock(), request.reorderThreshold(),
+                request.active(), request.expiryDateKeyPresent(), request.expiryDate(), request.batchNumber())));
     }
 
     @DeleteMapping("/products/{id}")

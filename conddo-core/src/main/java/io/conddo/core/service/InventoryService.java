@@ -17,6 +17,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -35,28 +37,47 @@ public class InventoryService {
     private final ProductCategoryRepository categoryRepository;
     private final StockAdjustmentRepository adjustmentRepository;
     private final TenantSession tenantSession;
+    private final Clock clock;
 
     public InventoryService(ProductRepository productRepository, ProductCategoryRepository categoryRepository,
-                            StockAdjustmentRepository adjustmentRepository, TenantSession tenantSession) {
+                            StockAdjustmentRepository adjustmentRepository, TenantSession tenantSession,
+                            Clock clock) {
         this.productRepository = productRepository;
         this.categoryRepository = categoryRepository;
         this.adjustmentRepository = adjustmentRepository;
         this.tenantSession = tenantSession;
+        this.clock = clock;
     }
 
     // ----- products -----------------------------------------------------------
 
     @Transactional(readOnly = true)
-    public Page<ProductView> list(String search, UUID categoryId, boolean lowStock, Pageable pageable) {
+    public Page<ProductView> list(String search, UUID categoryId, boolean lowStock,
+                                  Integer expiringWithinDays, Pageable pageable) {
         tenantSession.bind();
-        Page<Product> page = productRepository.findAll(filteredBy(search, categoryId, lowStock), pageable);
+        Page<Product> page = productRepository.findAll(
+                filteredBy(search, categoryId, lowStock, expiringWithinDays), pageable);
         Map<UUID, String> categories = categoryNames();
         return page.map(p -> new ProductView(p, categories.get(p.getCategoryId())));
+    }
+
+    /** Existing call signature — preserved so legacy callers (seeder) don't break. */
+    @Transactional(readOnly = true)
+    public Page<ProductView> list(String search, UUID categoryId, boolean lowStock, Pageable pageable) {
+        return list(search, categoryId, lowStock, null, pageable);
     }
 
     @Transactional
     public ProductView create(String name, String sku, UUID categoryId, BigDecimal price,
                               int stock, int reorderThreshold, Boolean active) {
+        return create(name, sku, categoryId, price, stock, reorderThreshold, active, null, null);
+    }
+
+    /** Full-fidelity create — pharmacy callers pass {@code expiryDate} + {@code batchNumber}. */
+    @Transactional
+    public ProductView create(String name, String sku, UUID categoryId, BigDecimal price,
+                              int stock, int reorderThreshold, Boolean active,
+                              LocalDate expiryDate, String batchNumber) {
         tenantSession.bind();
         if (categoryId != null) {
             requireCategory(categoryId);
@@ -64,6 +85,10 @@ public class InventoryService {
         Product product = new Product(TenantContext.require(), name, sku, categoryId, price, stock, reorderThreshold);
         if (active != null) {
             product.setActive(active);
+        }
+        product.setExpiryDate(expiryDate);
+        if (batchNumber != null) {
+            product.setBatchNumber(batchNumber);
         }
         return withCategory(productRepository.save(product));
     }
@@ -77,6 +102,18 @@ public class InventoryService {
     @Transactional
     public ProductView update(UUID id, String name, String sku, UUID categoryId, BigDecimal price,
                               Integer stock, Integer reorderThreshold, Boolean active) {
+        return update(id, name, sku, categoryId, price, stock, reorderThreshold, active,
+                false, null, null);
+    }
+
+    /**
+     * Full-fidelity PATCH — pharmacy callers can set or clear {@code expiryDate}
+     * (clear by passing {@code expiryDateProvided = true} + {@code expiryDate = null}).
+     */
+    @Transactional
+    public ProductView update(UUID id, String name, String sku, UUID categoryId, BigDecimal price,
+                              Integer stock, Integer reorderThreshold, Boolean active,
+                              boolean expiryDateProvided, LocalDate expiryDate, String batchNumber) {
         tenantSession.bind();
         Product product = requireProduct(id);
         product.rename(name);
@@ -98,6 +135,12 @@ public class InventoryService {
         }
         if (active != null) {
             product.setActive(active);
+        }
+        if (expiryDateProvided) {
+            product.setExpiryDate(expiryDate);
+        }
+        if (batchNumber != null) {
+            product.setBatchNumber(batchNumber);
         }
         return withCategory(productRepository.save(product));
     }
@@ -169,7 +212,8 @@ public class InventoryService {
                 .orElseThrow(() -> new NotFoundException("Category not found"));
     }
 
-    private Specification<Product> filteredBy(String search, UUID categoryId, boolean lowStock) {
+    private Specification<Product> filteredBy(String search, UUID categoryId, boolean lowStock,
+                                              Integer expiringWithinDays) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (search != null && !search.isBlank()) {
@@ -185,6 +229,12 @@ public class InventoryService {
                 predicates.add(cb.and(
                         cb.greaterThan(root.get("reorderThreshold"), 0),
                         cb.lessThanOrEqualTo(root.get("stock"), root.get("reorderThreshold"))));
+            }
+            if (expiringWithinDays != null && expiringWithinDays >= 0) {
+                // Includes already-expired (expiry_date <= today + N days).
+                LocalDate cutoff = LocalDate.now(clock).plusDays(expiringWithinDays);
+                predicates.add(cb.isNotNull(root.get("expiryDate")));
+                predicates.add(cb.lessThanOrEqualTo(root.<LocalDate>get("expiryDate"), cutoff));
             }
             return cb.and(predicates.toArray(new Predicate[0]));
         };

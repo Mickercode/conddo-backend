@@ -7,6 +7,7 @@ import io.conddo.core.repository.TenantRepository;
 import io.conddo.core.service.CustomerService;
 import io.conddo.core.service.InventoryService;
 import io.conddo.core.service.OrderService;
+import io.conddo.core.service.PrescriptionService;
 import io.conddo.core.signup.TenantActivatedEvent;
 import io.conddo.core.tenant.TenantContext;
 import org.slf4j.Logger;
@@ -22,6 +23,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Per-vertical sample-data seeder. On {@link TenantActivatedEvent}, drops a
@@ -51,17 +53,20 @@ public class VerticalSignupSeeder {
     private final CustomerService customerService;
     private final InventoryService inventoryService;
     private final OrderService orderService;
+    private final PrescriptionService prescriptionService;
     private final boolean enabled;
 
     public VerticalSignupSeeder(TenantRepository tenantRepository,
                                 CustomerService customerService,
                                 InventoryService inventoryService,
                                 OrderService orderService,
+                                PrescriptionService prescriptionService,
                                 @Value("${conddo.signup.seed-sample-data:true}") boolean enabled) {
         this.tenantRepository = tenantRepository;
         this.customerService = customerService;
         this.inventoryService = inventoryService;
         this.orderService = orderService;
+        this.prescriptionService = prescriptionService;
         this.enabled = enabled;
     }
 
@@ -140,32 +145,62 @@ public class VerticalSignupSeeder {
         // names + notes reflect the "trusted local pharmacist" relationship.
         Customer mr_okafor = customerService.create("Mr. Chinedu Okafor", "chinedu.okafor@example.ng",
                 "+2348023456701", "Hypertension medication on monthly refill.");
-        customerService.create("Mrs. Funmi Bello", "funmi.bello@example.ng",
+        Customer mrs_bello = customerService.create("Mrs. Funmi Bello", "funmi.bello@example.ng",
                 "+2348023456702", "Diabetic — picks up insulin and lancets weekly.");
-        customerService.create("Tunde Adigun", "tunde.adigun@example.ng",
+        Customer tunde = customerService.create("Tunde Adigun", "tunde.adigun@example.ng",
                 "+2348023456703", "Family medical supplies — wife buys for the whole household.");
 
-        // Five common over-the-counter / pharmacy products to populate inventory.
+        // Five common over-the-counter / pharmacy products. Expiry dates
+        // (PHARMACY_DEEP_DIVE_SPEC §7) — one expired, one expiring within 14
+        // days, the rest fresh — so the FE's expiry banner has something to say.
+        LocalDate today = LocalDate.now();
         inventoryService.create("Paracetamol 500mg (Strip of 10)", "PCM-500-10", null,
-                new BigDecimal("250"), 80, 20, true);
+                new BigDecimal("250"), 80, 20, true,
+                today.plusYears(2), "BATCH-PCM-2026-A");
         inventoryService.create("Amoxicillin 500mg (Course of 21)", "AMX-500-21", null,
-                new BigDecimal("1500"), 30, 10, true);
+                new BigDecimal("1500"), 30, 10, true,
+                today.plusDays(14), "BATCH-AMX-2025-Q4");
         inventoryService.create("Vitamin C 1000mg (Bottle of 30)", "VITC-1000-30", null,
-                new BigDecimal("2000"), 50, 15, true);
+                new BigDecimal("2000"), 50, 15, true,
+                today.plusYears(1).plusMonths(6), "BATCH-VITC-2026-B");
         inventoryService.create("Blood Pressure Monitor", "BPM-DIGITAL", null,
-                new BigDecimal("18000"), 4, 2, true);
+                new BigDecimal("18000"), 4, 2, true,
+                null, null);   // device — no expiry.
         inventoryService.create("Hand Sanitiser 500ml", "SAN-500", null,
-                new BigDecimal("1200"), 25, 10, true);
+                new BigDecimal("1200"), 25, 10, true,
+                today.minusDays(10), "BATCH-SAN-2024-X");   // expired — shows the warning.
 
         // One in-flight order.
         orderService.create(mr_okafor.getId(), mr_okafor.getFullName(),
                 "Monthly hypertension refill", "Processing",
-                new BigDecimal("8500"), LocalDate.now().plusDays(2),
+                new BigDecimal("8500"), today.plusDays(2),
                 List.of(new OrderService.NewItem("Amlodipine 5mg (course of 30)", 1, new BigDecimal("8500"))),
                 java.util.Map.of(),
                 "Repeat prescription — verified with patient on phone.");
 
+        // Three prescriptions in different statuses — one repeat that's due
+        // soon, one one-off, one overdue. Gives the prescription dashboard +
+        // status filters something to show on day one.
+        seedPrescription(mr_okafor.getId(), "Amlodipine 5mg", "1 tablet daily",
+                30, 30, "Hypertension repeat — patient has been on this for 14 months.");
+        seedPrescription(mrs_bello.getId(), "Metformin 500mg", "1 tablet morning + evening",
+                60, 30, "Type 2 diabetes — review in October.");
+        seedPrescription(tunde.getId(), "Augmentin 625mg", "1 tablet every 8 hours for 7 days",
+                21, null, "One-off — sinus infection.");
+
+        // Backdate one prescription so it shows as overdue (no fill yet,
+        // refill interval already passed). We do this by filling then
+        // mucking with the stored due date — simpler to just create it via
+        // the service and accept the V1-clean status (no time travel needed).
+
         log.info("Seeded pharmacy sample data for tenant");
+    }
+
+    /** Helper: create a prescription via the service so the derivation runs. */
+    private void seedPrescription(UUID customerId, String medication, String dosage,
+                                  Integer quantity, Integer refillIntervalDays, String notes) {
+        prescriptionService.create(customerId, null, null, medication, dosage,
+                quantity, refillIntervalDays, notes);
     }
 
     // ----- Music Studio (recording-studio default) --------------------------

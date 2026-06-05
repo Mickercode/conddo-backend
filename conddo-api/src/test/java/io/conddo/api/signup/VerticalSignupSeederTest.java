@@ -39,11 +39,14 @@ class VerticalSignupSeederTest {
     private final InventoryService inventoryService = mock(InventoryService.class);
     private final OrderService orderService = mock(OrderService.class);
 
+    private final io.conddo.core.service.PrescriptionService prescriptionService =
+            mock(io.conddo.core.service.PrescriptionService.class);
+
     private VerticalSignupSeeder seeder(boolean enabled) {
         when(customerService.create(anyString(), anyString(), anyString(), anyString()))
                 .thenAnswer(inv -> customer(inv.getArgument(0)));
         return new VerticalSignupSeeder(tenantRepository, customerService,
-                inventoryService, orderService, enabled);
+                inventoryService, orderService, prescriptionService, enabled);
     }
 
     @Test
@@ -60,16 +63,22 @@ class VerticalSignupSeederTest {
     }
 
     @Test
-    void pharmacySeedsThreeCustomersFiveProductsAndOneOrder() {
+    void pharmacySeedsThreeCustomersFiveProductsOneOrderAndThreePrescriptions() {
         UUID tenantId = UUID.randomUUID();
         when(tenantRepository.findById(tenantId)).thenReturn(Optional.of(tenant("pharmacy")));
         seeder(true).onTenantActivated_seedSampleData(new TenantActivatedEvent(tenantId));
 
         verify(customerService, times(3)).create(anyString(), anyString(), anyString(), anyString());
+        // Inventory now uses the 9-arg create with expiryDate + batchNumber.
         verify(inventoryService, times(5)).create(anyString(), anyString(), any(),
-                any(BigDecimal.class), anyInt(), anyInt(), eq(true));
+                any(BigDecimal.class), anyInt(), anyInt(), eq(true),
+                org.mockito.ArgumentMatchers.<java.time.LocalDate>any(),
+                org.mockito.ArgumentMatchers.<String>any());
         verify(orderService, times(1)).create(any(), anyString(), anyString(), anyString(),
                 any(), any(), any(), any(), anyString());
+        verify(prescriptionService, times(3)).create(any(UUID.class), org.mockito.ArgumentMatchers.<String>any(),
+                org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(), anyInt(),
+                org.mockito.ArgumentMatchers.<Integer>any(), anyString());
     }
 
     @Test

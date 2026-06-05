@@ -12,6 +12,7 @@ import io.conddo.core.auth.PhoneNotVerifiedException;
 import io.conddo.core.auth.RegistrationNotFoundException;
 import io.conddo.core.auth.UserAlreadyExistsException;
 import io.conddo.core.auth.UserNotFoundException;
+import io.conddo.core.service.PrescriptionService;
 import io.conddo.core.common.ApiError;
 import io.conddo.core.common.ApiResponse;
 import io.conddo.core.common.NotFoundException;
@@ -134,6 +135,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleUserAlreadyExists(UserAlreadyExistsException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.fail(ApiError.of("USER_ALREADY_EXISTS", ex.getMessage())));
+    }
+
+    /** Pharmacy refill reminder needs a phone — 422 per the spec. */
+    @ExceptionHandler(PrescriptionService.NoCustomerPhoneException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoCustomerPhone(PrescriptionService.NoCustomerPhoneException ex) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiResponse.fail(ApiError.of("no_customer_phone", ex.getMessage())));
     }
 
     /**

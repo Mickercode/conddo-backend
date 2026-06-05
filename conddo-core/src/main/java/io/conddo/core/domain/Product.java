@@ -10,6 +10,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -48,6 +49,14 @@ public class Product {
 
     @Column(nullable = false)
     private boolean active = true;
+
+    /** Expiry-aware inventory (pharmacy). Null = "not tracked" — most non-pharmacy verticals. */
+    @Column(name = "expiry_date")
+    private LocalDate expiryDate;
+
+    /** Batch / lot number associated with the current stock. Informational at V1; Phase 2 splits into a batches table. */
+    @Column(name = "batch_number")
+    private String batchNumber;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -145,5 +154,22 @@ public class Product {
 
     public void setActive(boolean active) {
         this.active = active;
+    }
+
+    public LocalDate getExpiryDate() {
+        return expiryDate;
+    }
+
+    /** PATCH semantics: callers explicitly pass null to clear (PrescriptionRequest sends null). */
+    public void setExpiryDate(LocalDate expiryDate) {
+        this.expiryDate = expiryDate;
+    }
+
+    public String getBatchNumber() {
+        return batchNumber;
+    }
+
+    public void setBatchNumber(String batchNumber) {
+        this.batchNumber = batchNumber;
     }
 }
