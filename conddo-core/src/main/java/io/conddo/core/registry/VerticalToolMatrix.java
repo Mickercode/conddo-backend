@@ -85,10 +85,23 @@ public class VerticalToolMatrix {
         return byTier.getOrDefault(normalizePlan(plan), byTier.get("starter"));
     }
 
-    /** Normalises a stored plan to a known tier; unknown/blank/"free" → starter. */
+    /**
+     * Normalise a stored plan to a known tier; unknown/blank/"free" → starter.
+     * Handles both legacy tier names ({@code starter/business/pro}) and the new
+     * product names introduced by BILLING_TIERS_SPEC ({@code launcher/growth/scaler}).
+     * The matrix keys stay on the tier axis — translating here keeps the seven
+     * vertical entries above from needing per-rebrand edits.
+     */
     public String normalizePlan(String plan) {
         String p = plan == null ? "" : plan.trim().toLowerCase();
-        return PLAN_ORDER.contains(p) ? p : "starter";
+        // New product names → matrix tier names. Tier names pass through.
+        String mapped = switch (p) {
+            case "launcher" -> "starter";
+            case "growth"   -> "business";
+            case "scaler"   -> "pro";
+            default         -> p;
+        };
+        return PLAN_ORDER.contains(mapped) ? mapped : "starter";
     }
 
     private String normalizeVertical(String vertical) {

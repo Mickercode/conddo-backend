@@ -4,6 +4,7 @@ import io.conddo.core.common.NotFoundException;
 import io.conddo.core.domain.Tenant;
 import io.conddo.core.payments.PaymentsGateway;
 import io.conddo.core.repository.TenantRepository;
+import io.conddo.core.service.BillingService;
 import io.conddo.core.signup.TenantActivatedEvent;
 import io.conddo.core.signup.WebsiteTypeRecommendation;
 import io.conddo.core.signup.WebsiteTypeResolver;
@@ -38,15 +39,18 @@ public class TenantActivationListener {
     private final WebsiteTypeResolver websiteTypeResolver;
     private final StudioJobGateway studioJobGateway;
     private final PaymentsGateway paymentsGateway;
+    private final BillingService billingService;
 
     public TenantActivationListener(TenantRepository tenantRepository,
                                     WebsiteTypeResolver websiteTypeResolver,
                                     StudioJobGateway studioJobGateway,
-                                    PaymentsGateway paymentsGateway) {
+                                    PaymentsGateway paymentsGateway,
+                                    BillingService billingService) {
         this.tenantRepository = tenantRepository;
         this.websiteTypeResolver = websiteTypeResolver;
         this.studioJobGateway = studioJobGateway;
         this.paymentsGateway = paymentsGateway;
+        this.billingService = billingService;
     }
 
     @Async
@@ -93,6 +97,28 @@ public class TenantActivationListener {
                             tenant.getId(), account.subaccountId(), account.status()));
         } catch (RuntimeException ex) {
             log.error("Auto-provision payments failed for tenant {}: {}", event.tenantId(), ex.getMessage());
+        }
+    }
+
+    /**
+     * Third handler on the same event (BILLING_TIERS_SPEC §3): start the
+     * 14-day trial for the new tenant. Idempotent — BillingService skips if a
+     * live subscription already exists, so a replayed event is safe.
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onTenantActivated_startTrial(TenantActivatedEvent event) {
+        try {
+            Tenant tenant = tenantRepository.findById(event.tenantId())
+                    .orElseThrow(() -> new NotFoundException("Tenant " + event.tenantId() + " vanished"));
+            // tenant.getPlanId() is now post-rename — launcher / growth / scaler.
+            // Fall through to launcher (BillingService default) when the wizard didn't pick.
+            var sub = billingService.createTrialForNewTenant(tenant.getId(), tenant.getPlanId());
+            log.info("Started {}-trial for tenant {} (plan={}, expires={})",
+                    sub.getStatus(), tenant.getId(), tenant.getPlanId(), sub.getExpiresAt());
+        } catch (RuntimeException ex) {
+            log.error("Auto-start trial failed for tenant {}: {}", event.tenantId(), ex.getMessage());
         }
     }
 

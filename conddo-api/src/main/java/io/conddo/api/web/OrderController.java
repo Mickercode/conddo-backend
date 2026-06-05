@@ -46,6 +46,8 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/v1/orders")
+@io.conddo.api.billing.RequiresFeature(value = "order_management",
+        requiredPlan = "Growth", requiredPlanPrice = 45000)
 public class OrderController {
 
     private static final String READ = "hasAnyRole('TENANT_ADMIN','STAFF','SUPER_ADMIN')";

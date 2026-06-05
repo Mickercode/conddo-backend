@@ -39,6 +39,8 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/v1/bookings")
+@io.conddo.api.billing.RequiresFeature(value = "bookings",
+        requiredPlan = "Growth", requiredPlanPrice = 45000)
 public class BookingController {
 
     private static final String READ = "hasAnyRole('TENANT_ADMIN','STAFF','SUPER_ADMIN')";

@@ -107,6 +107,11 @@ class AuthFlowTest {
         // Don't seed sample data in tests — existing assertions rely on
         // a tenant having zero customers / products immediately after signup.
         registry.add("conddo.signup.seed-sample-data", () -> "false");
+        // Don't enforce billing feature gates in the e2e harness — every
+        // existing test creates Launcher-tier tenants (planId=starter
+        // → launcher) and exercises modules now gated to Growth+.
+        // Per-feature gate tests live in dedicated unit tests.
+        registry.add("conddo.billing.enforce-feature-gates", () -> "false");
     }
 
     @Autowired

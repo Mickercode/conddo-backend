@@ -37,16 +37,19 @@ public class StaffService {
     private final EmailSender emailSender;
     private final PasswordHasher passwordHasher;
     private final TenantSession tenantSession;
+    private final BillingService billingService;
 
     public StaffService(UserRepository userRepository, AuditLogRepository auditLogRepository,
                         TenantRepository tenantRepository, EmailSender emailSender,
-                        PasswordHasher passwordHasher, TenantSession tenantSession) {
+                        PasswordHasher passwordHasher, TenantSession tenantSession,
+                        BillingService billingService) {
         this.userRepository = userRepository;
         this.auditLogRepository = auditLogRepository;
         this.tenantRepository = tenantRepository;
         this.emailSender = emailSender;
         this.passwordHasher = passwordHasher;
         this.tenantSession = tenantSession;
+        this.billingService = billingService;
     }
 
     @Transactional(readOnly = true)
@@ -61,6 +64,16 @@ public class StaffService {
         String resolvedRole = normaliseRole(role);
         if (userRepository.findByEmail(email).isPresent()) {
             throw new IllegalArgumentException("A user with that email already exists");
+        }
+        // Plan-tier staff cap (BILLING_TIERS_SPEC §5 — Launcher: 2, Growth: 5,
+        // Scaler: unlimited). The owner counts; this check fires when current
+        // count >= limit.
+        UUID tenantId = TenantContext.require();
+        int currentStaff = userRepository.findAll().size();
+        int limit = billingService.featureLimit(tenantId, "staff_accounts");
+        if (limit > 0 && limit != Integer.MAX_VALUE && currentStaff >= limit) {
+            throw new IllegalArgumentException(
+                    "Staff seat limit reached (" + limit + "). Upgrade your plan to invite more staff.");
         }
         // No usable password until the invitee sets one via the reset flow.
         String placeholderHash = passwordHasher.hash(UUID.randomUUID().toString());
