@@ -112,23 +112,37 @@ growth    ₦45,000/mo  ₦120,000/qtr is_custom=false
 scaler    ₦120,000/mo NULL         is_custom=true
 ```
 
-Feature matrix (each row → `plan_features` row per plan):
+Feature matrix (each row → `plan_features` row per plan).
 
-| feature_key          | launcher    | growth      | scaler      |
-|----------------------|-------------|-------------|-------------|
-| website              | true        | true        | true        |
-| custom_domain        | false       | true        | true        |
-| business_email       | false       | true        | true        |
-| order_management     | false       | true        | true        |
-| bookings             | false       | true        | true        |
-| email_campaigns      | false       | true        | true        |
-| sms_campaigns        | false       | true        | true        |
-| social_scheduler     | false       | true        | true        |
-| ad_management        | false       | true        | true        |
-| multi_location       | false       | false       | true        |
-| api_access           | false       | false       | true        |
-| advanced_analytics   | false       | false       | true        |
-| staff_accounts       | "2"         | "5"         | "unlimited" |
+> **⚠ Spec change 2026-06-05**: `order_management` and `bookings` moved from
+> Growth to Launcher (was `false → true` on the Launcher column). Reason in
+> the product doc:
+> [conddo-pricing-tiers.md](../conddo-pricing-tiers.md). Action for BE: flip
+> those two rows in `plan_features` for the Launcher plan (data update; no
+> schema or controller change). The `@RequiresFeature("order_management")`
+> and `@RequiresFeature("bookings")` annotations stay in place; only the
+> plan_features rows change.
+>
+> Also new: `public_bookings_widget` (Growth+) — used to gate the
+> customer-facing self-book widget on the tenant's public site. Internal
+> booking management itself is Launcher.
+
+| feature_key             | launcher    | growth      | scaler      |
+|-------------------------|-------------|-------------|-------------|
+| website                 | true        | true        | true        |
+| **order_management**    | **true**    | true        | true        |
+| **bookings**            | **true**    | true        | true        |
+| custom_domain           | false       | true        | true        |
+| business_email          | false       | true        | true        |
+| public_bookings_widget  | false       | true        | true        |
+| email_campaigns         | false       | true        | true        |
+| sms_campaigns           | false       | true        | true        |
+| social_scheduler        | false       | true        | true        |
+| ad_management           | false       | true        | true        |
+| multi_location          | false       | false       | true        |
+| api_access              | false       | false       | true        |
+| advanced_analytics      | false       | false       | true        |
+| staff_accounts          | "2"         | "5"         | "unlimited" |
 
 ### 3. Trial on signup
 
