@@ -158,6 +158,57 @@ class PaymentServiceTest {
         assertEquals("RP-SUB-1", req.getValue().tenantSubaccountId());
     }
 
+    @Test
+    void creativeServiceChargeRoutesToPlatformNotTenantSubaccount() {
+        // No tenant account row at all — platform charges don't need one
+        // (the money lands in our master RoutePay account, not the tenant's).
+        when(tenantAccounts.findById(tenantId)).thenReturn(Optional.empty());
+        when(payments.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(routePay.initPayment(any())).thenReturn(
+                new RoutePayClient.InitPaymentResult("RP-TXN-CS-1", "https://pay/cs"));
+
+        UUID creativeRequestId = UUID.randomUUID();
+        Payment p = service.initPayment(tenantId, "amaka", new PaymentService.InitPaymentInput(
+                null, null, creativeRequestId, null, null,
+                "owner@amaka.test", "Owner Mer", "Static design", "https://r", 500_000L));
+
+        assertEquals(io.conddo.payments.domain.ChargeKind.CREATIVE_SERVICE, p.getChargeKind());
+        assertEquals(creativeRequestId, p.getCreativeRequestId());
+        ArgumentCaptor<RoutePayClient.InitPaymentRequest> req =
+                ArgumentCaptor.forClass(RoutePayClient.InitPaymentRequest.class);
+        verify(routePay).initPayment(req.capture());
+        assertNull(req.getValue().tenantSubaccountId(),
+                "creative-service charges must route to the platform account, not a sub-account");
+    }
+
+    @Test
+    void brandPackageChargeAlsoRoutesToPlatformAccount() {
+        when(tenantAccounts.findById(tenantId)).thenReturn(Optional.empty());
+        when(payments.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(routePay.initPayment(any())).thenReturn(
+                new RoutePayClient.InitPaymentResult("RP-TXN-BP-1", "https://pay/bp"));
+
+        UUID brandSubId = UUID.randomUUID();
+        Payment p = service.initPayment(tenantId, "amaka", new PaymentService.InitPaymentInput(
+                null, null, null, brandSubId, null,
+                "owner@amaka.test", "Owner Mer", "Pro Brand monthly", "https://r", 4_500_000L));
+
+        assertEquals(io.conddo.payments.domain.ChargeKind.BRAND_PACKAGE, p.getChargeKind());
+        assertEquals(brandSubId, p.getBrandPackageSubscriptionId());
+        ArgumentCaptor<RoutePayClient.InitPaymentRequest> req =
+                ArgumentCaptor.forClass(RoutePayClient.InitPaymentRequest.class);
+        verify(routePay).initPayment(req.capture());
+        assertNull(req.getValue().tenantSubaccountId());
+    }
+
+    @Test
+    void initPaymentRejectsTwoOfTheFourTargets() {
+        assertThrows(IllegalArgumentException.class, () -> service.initPayment(tenantId, "amaka",
+                new PaymentService.InitPaymentInput(
+                        orderId, null, UUID.randomUUID(), null, null,
+                        "c@x.test", "Cust", "desc", "https://x", 1000L)));
+    }
+
     // ----- webhook ------------------------------------------------------------
 
     @Test
@@ -203,7 +254,7 @@ class PaymentServiceTest {
         assertEquals(PaymentStatus.PAID, pending.getStatus());
         assertEquals(300L, pending.getFeeKobo());
         verify(notifyClient).notifyPayment(eq(pending.getTenantId()), eq(pending.getId()),
-                eq("PAID"), any(), any(), eq(pending.getAmountKobo()));
+                eq("PAID"), any(), any(), any(), any(), any(), eq(pending.getAmountKobo()));
     }
 
     @Test
@@ -223,7 +274,7 @@ class PaymentServiceTest {
         assertEquals("DUPLICATE", result.reason(),
                 "re-applied webhook for a terminal payment must short-circuit without re-saving or re-notifying");
         verify(payments, never()).save(any());
-        verify(notifyClient, never()).notifyPayment(any(), any(), any(), any(), any(), anyLong());
+        verify(notifyClient, never()).notifyPayment(any(), any(), any(), any(), any(), any(), any(), any(), anyLong());
     }
 
     @Test

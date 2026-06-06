@@ -161,17 +161,19 @@ public class HttpPaymentsGateway implements PaymentsGateway {
             return Optional.empty();
         }
         try {
+            // Field names match conddo-payments' InitChargeServiceRequest DTO.
+            // Sending creativeRequestId (and not orderId/bookingId) tells
+            // PaymentService.deriveChargeKind to route to the platform account.
             java.util.LinkedHashMap<String, Object> body = new java.util.LinkedHashMap<>();
             body.put("tenantId", tenantId);
             body.put("tenantSlug", tenantSlug);
-            body.put("requestId", requestId);
-            body.put("userId", userId);
-            body.put("userEmail", userEmail);
-            body.put("userName", userName);
+            body.put("creativeRequestId", requestId);
+            body.put("customerId", userId);
+            body.put("customerEmail", userEmail);
+            body.put("customerName", userName);
             body.put("description", description);
             body.put("amountKobo", amountKobo);
             body.put("returnUrl", returnUrl);
-            body.put("kind", "creative_service");   // conddo-payments routes to the platform account, not a sub-account
 
             JsonNode response = restClient.post()
                     .uri("/api/payments/internal/charges")

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.conddo.payments.common.ConflictException;
 import io.conddo.payments.common.NotFoundException;
+import io.conddo.payments.domain.ChargeKind;
 import io.conddo.payments.domain.Payment;
 import io.conddo.payments.domain.PaymentStatus;
 import io.conddo.payments.domain.TenantAccount;
@@ -102,32 +103,49 @@ public class PaymentService {
 
     @Transactional
     public Payment initPayment(UUID tenantId, String tenantSlug, InitPaymentInput input) {
-        if ((input.orderId() == null) == (input.bookingId() == null)) {
-            throw new IllegalArgumentException("Exactly one of orderId or bookingId must be set");
-        }
+        ChargeKind chargeKind = deriveChargeKind(input);
         if (input.amountKobo() <= 0) {
             throw new IllegalArgumentException("amount must be positive (in kobo)");
         }
-        TenantAccount account = tenantAccounts.findById(tenantId)
-                .orElseThrow(() -> new NotFoundException(
-                        "No payments account for tenant " + tenantId + " — has it been provisioned?"));
-        if (!account.getStatus().canAcceptPayments()) {
-            throw new ConflictException(
-                    "Tenant payments account is " + account.getStatus() + " — cannot accept payments");
+
+        // Tenant account only required for sub-account-routed charges. Platform
+        // charges (creative service, brand package) still verify the tenant
+        // exists, but don't require ACTIVE / a provisioned subaccountId — a
+        // tenant whose RoutePay sub-account never provisioned can still buy
+        // Conddo creative services because the money lands in our account.
+        TenantAccount account = tenantAccounts.findById(tenantId).orElse(null);
+        if (chargeKind.routesToTenantSubaccount()) {
+            if (account == null) {
+                throw new NotFoundException(
+                        "No payments account for tenant " + tenantId + " — has it been provisioned?");
+            }
+            if (!account.getStatus().canAcceptPayments()) {
+                throw new ConflictException(
+                        "Tenant payments account is " + account.getStatus() + " — cannot accept payments");
+            }
         }
 
         String reference = "RP-" + tenantSlug + "-" + UUID.randomUUID().toString().substring(0, 8);
-        Payment payment = new Payment(tenantId, tenantSlug, input.orderId(), input.bookingId(),
+        Payment payment = new Payment(tenantId, tenantSlug,
+                input.orderId(), input.bookingId(),
+                input.creativeRequestId(), input.brandPackageSubscriptionId(),
+                chargeKind,
                 input.customerId(), input.customerEmail(), input.customerName(),
                 input.description(), reference, input.amountKobo());
         payment = payments.save(payment);
 
+        // Platform charges pass a null subaccountId — the money lands in the
+        // master RoutePay account, not fanned out to a tenant. platformFeeBps
+        // is irrelevant on those calls (the whole amount is ours already).
+        String subaccountId = chargeKind.routesToTenantSubaccount() && account != null
+                ? account.getRoutepaySubaccountId()
+                : null;
         try {
             RoutePayClient.InitPaymentResult result = routePay.initPayment(
                     new RoutePayClient.InitPaymentRequest(
                             reference, input.amountKobo(), input.customerEmail(), input.customerName(),
                             input.description(), input.returnUrl(),
-                            account.getRoutepaySubaccountId(), platformFeeBps));
+                            subaccountId, platformFeeBps));
             payment.markInitialised(result.routepayTransactionRef(), result.paymentUrl());
             payment = payments.save(payment);
         } catch (RuntimeException ex) {
@@ -137,6 +155,38 @@ public class PaymentService {
             throw ex;
         }
         return payment;
+    }
+
+    /**
+     * Exactly one of orderId / bookingId / creativeRequestId /
+     * brandPackageSubscriptionId must be set. The set field determines the
+     * chargeKind (which drives platform-vs-subaccount routing).
+     */
+    private static ChargeKind deriveChargeKind(InitPaymentInput input) {
+        int set = 0;
+        ChargeKind kind = null;
+        if (input.orderId() != null) {
+            set++;
+            kind = ChargeKind.ORDER;
+        }
+        if (input.bookingId() != null) {
+            set++;
+            kind = ChargeKind.BOOKING_DEPOSIT;
+        }
+        if (input.creativeRequestId() != null) {
+            set++;
+            kind = ChargeKind.CREATIVE_SERVICE;
+        }
+        if (input.brandPackageSubscriptionId() != null) {
+            set++;
+            kind = ChargeKind.BRAND_PACKAGE;
+        }
+        if (set != 1) {
+            throw new IllegalArgumentException(
+                    "Exactly one of orderId, bookingId, creativeRequestId, "
+                            + "or brandPackageSubscriptionId must be set");
+        }
+        return kind;
     }
 
     // ----- payment reads -----------------------------------------------------
@@ -240,8 +290,10 @@ public class PaymentService {
         event.markProcessed(payment.getId());
 
         notifyClient.notifyPayment(payment.getTenantId(), payment.getId(),
-                payment.getStatus().name(), payment.getOrderId(), payment.getBookingId(),
-                payment.getAmountKobo());
+                payment.getStatus().name(),
+                payment.getOrderId(), payment.getBookingId(),
+                payment.getCreativeRequestId(), payment.getBrandPackageSubscriptionId(),
+                payment.getRoutepayReference(), payment.getAmountKobo());
         return WebhookResult.processed(payment.getId(), payment.getStatus());
     }
 
@@ -289,9 +341,19 @@ public class PaymentService {
 
     // ----- input / output records --------------------------------------------
 
-    public record InitPaymentInput(UUID orderId, UUID bookingId, UUID customerId,
+    public record InitPaymentInput(UUID orderId, UUID bookingId,
+                                   UUID creativeRequestId, UUID brandPackageSubscriptionId,
+                                   UUID customerId,
                                    String customerEmail, String customerName,
                                    String description, String returnUrl, long amountKobo) {
+
+        /** Back-compat constructor — no creative-service / brand-package fields. */
+        public InitPaymentInput(UUID orderId, UUID bookingId, UUID customerId,
+                                String customerEmail, String customerName,
+                                String description, String returnUrl, long amountKobo) {
+            this(orderId, bookingId, null, null, customerId,
+                    customerEmail, customerName, description, returnUrl, amountKobo);
+        }
     }
 
     public record WebhookResult(boolean processed, String reason, UUID paymentId, PaymentStatus status) {
