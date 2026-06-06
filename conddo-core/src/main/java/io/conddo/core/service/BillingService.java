@@ -204,9 +204,36 @@ public class BillingService {
     }
 
     /**
+     * Hourly scan that walks every live subscription past {@code expires_at}
+     * (or marked cancelled-pending) and applies the transition. Returns the
+     * shape needed by the scheduler to fan out merchant notifications — the
+     * caller compares {@code from} vs {@code to} to skip rows that didn't
+     * actually move. Bypasses RLS (BillingService convention).
+     */
+    @Transactional
+    public List<TransitionResult> runExpiryScan() {
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        List<TransitionResult> changed = new java.util.ArrayList<>();
+        for (TenantSubscription sub : subscriptionRepository.findExpirable(now)) {
+            String fromStatus = sub.getStatus();
+            TenantSubscription updated = applyExpiryTransitions(sub);
+            if (!fromStatus.equals(updated.getStatus())) {
+                changed.add(new TransitionResult(
+                        updated.getTenantId(),
+                        updated.getId(),
+                        fromStatus,
+                        updated.getStatus(),
+                        updated.getPlanId(),
+                        updated.getExpiresAt()));
+            }
+        }
+        return changed;
+    }
+
+    /**
      * Spec §6 — apply state transitions if {@code expires_at} has passed. Run
-     * lazily from the JWT-mint and manifest-resolve paths; the Phase-2 cron
-     * does the same proactively.
+     * lazily from the JWT-mint and manifest-resolve paths; the hourly
+     * {@code BillingExpiryScheduler} does the same proactively.
      */
     @Transactional
     public TenantSubscription applyExpiryTransitions(TenantSubscription sub) {
@@ -268,5 +295,15 @@ public class BillingService {
     }
 
     public record SubscriptionWithPlan(TenantSubscription subscription, SubscriptionPlan plan) {
+    }
+
+    /** One row per subscription that actually changed status in {@link #runExpiryScan}. */
+    public record TransitionResult(
+            UUID tenantId,
+            UUID subscriptionId,
+            String fromStatus,
+            String toStatus,
+            UUID planId,
+            OffsetDateTime expiresAt) {
     }
 }

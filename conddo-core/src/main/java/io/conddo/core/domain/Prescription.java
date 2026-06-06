@@ -81,6 +81,18 @@ public class Prescription {
 
     public Prescription(UUID tenantId, UUID customerId, String medication, String dosage,
                         Integer quantity, Integer refillIntervalDays, String notes) {
+        this(tenantId, customerId, medication, dosage, quantity, refillIntervalDays, notes,
+                OffsetDateTime.now());
+    }
+
+    /**
+     * Clock-aware constructor — the service overload passes
+     * {@code OffsetDateTime.now(clock)} so tests can pin a fixed instant and
+     * the derived {@code next_refill_due} doesn't drift past midnight.
+     */
+    public Prescription(UUID tenantId, UUID customerId, String medication, String dosage,
+                        Integer quantity, Integer refillIntervalDays, String notes,
+                        OffsetDateTime issuedAt) {
         this.tenantId = tenantId;
         this.customerId = customerId;
         this.medication = medication;
@@ -88,6 +100,9 @@ public class Prescription {
         this.quantity = quantity;
         this.refillIntervalDays = refillIntervalDays;
         this.notes = notes;
+        if (issuedAt != null) {
+            this.issuedAt = issuedAt;
+        }
         recomputeNextRefillDue();
     }
 

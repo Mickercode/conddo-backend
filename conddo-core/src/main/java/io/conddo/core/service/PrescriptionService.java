@@ -125,7 +125,7 @@ public class PrescriptionService {
         }
         Prescription saved = prescriptionRepository.save(new Prescription(
                 TenantContext.require(), resolvedCustomerId, medication, dosage, quantity,
-                refillIntervalDays, notes));
+                refillIntervalDays, notes, OffsetDateTime.now(clock)));
         return view(saved);
     }
 

@@ -25,4 +25,19 @@ public interface TenantSubscriptionRepository extends JpaRepository<TenantSubscr
     Optional<TenantSubscription> findActiveByTenantId(@Param("tenantId") UUID tenantId);
 
     List<TenantSubscription> findByTenantIdOrderByStartedAtDesc(UUID tenantId);
+
+    /**
+     * Candidates for the hourly expiry scan
+     * ({@link io.conddo.core.service.BillingService#runExpiryScan}). Returns
+     * every live subscription whose {@code expires_at} has passed, OR which
+     * has been marked cancelled but not yet finalized — the per-row
+     * transition logic in {@code applyExpiryTransitions} sorts out grace vs
+     * expired vs cancelled-completion.
+     */
+    @Query("""
+            select s from TenantSubscription s
+            where s.status in ('trialing','active','grace')
+              and (s.expiresAt < :now or s.cancelledAt is not null)
+            """)
+    List<TenantSubscription> findExpirable(@Param("now") java.time.OffsetDateTime now);
 }

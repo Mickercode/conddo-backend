@@ -2,6 +2,7 @@ package io.conddo;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.conddo.api.billing.BillingExpiryScheduler;
 import io.conddo.core.auth.PasswordHasher;
 import io.conddo.core.notify.EmailSender;
 import io.conddo.core.notify.SmsSender;
@@ -26,6 +27,8 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 
@@ -94,12 +97,19 @@ class PublicSiteFlowTest {
         registry.add("conddo.signup.seed-sample-data", () -> "false");
         // Public-site module gating is enforced by direct calls into
         // BillingService — independent of the dashboard's interceptor switch.
+        // Pin the expiry cron to a far-future schedule so it never fires
+        // during the test run; tests call BillingExpiryScheduler.runOnce()
+        // explicitly after backdating the subscription expires_at.
+        registry.add("conddo.billing.expiry-cron", () -> "0 0 0 1 1 ?");
+        registry.add("conddo.billing.grace-period-days", () -> "3");
     }
 
     @Autowired
     private MockMvc mockMvc;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private BillingExpiryScheduler expiryScheduler;
     @MockBean
     private EmailSender emailSender;
     @MockBean
@@ -289,6 +299,79 @@ class PublicSiteFlowTest {
                                         "phone", "0809000444")))))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("MODULE_NOT_ENABLED"));
+    }
+
+    // ===== EXPIRY CRON — trialing → grace → expired transitions + notify ===
+
+    @Test
+    void expiryScanMovesTrialingPastExpiresIntoGraceAndNotifies() throws Exception {
+        String tenantId = signup("ph-trial-end", "owner@ph-trial-end.test");
+        login("ph-trial-end", "owner@ph-trial-end.test");
+        // Wait for the trial subscription row to land (created by an
+        // @Async AFTER_COMMIT listener on signup).
+        waitForSubscription(tenantId);
+
+        // Backdate expires_at to yesterday — trial is over.
+        try (Connection owner = ownerConn();
+             PreparedStatement ps = owner.prepareStatement(
+                     "UPDATE tenant_subscriptions SET expires_at = ? WHERE tenant_id = ?::uuid")) {
+            ps.setObject(1, OffsetDateTime.now(ZoneOffset.UTC).minusDays(1));
+            ps.setString(2, tenantId);
+            assertTrue(ps.executeUpdate() == 1);
+        }
+
+        expiryScheduler.runOnce();
+
+        assertEquals("grace", readSubStatus(tenantId), "trialing → grace after expires");
+        verify(emailSender, timeout(5_000)).send(
+                eq("owner@ph-trial-end.test"),
+                contains("trial just ended"),
+                anyString());
+        // Bell feed has the PLAN_GRACE row.
+        String token = login("ph-trial-end", "owner@ph-trial-end.test");
+        mockMvc.perform(get("/api/v1/notifications")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].type").value("PLAN_GRACE"));
+    }
+
+    @Test
+    void expiryScanMovesGracePastGracePeriodIntoExpiredAndNotifies() throws Exception {
+        String tenantId = signup("ph-expired", "owner@ph-expired.test");
+        login("ph-expired", "owner@ph-expired.test");
+        waitForSubscription(tenantId);
+
+        // Set grace + backdate well past the 3-day grace window.
+        OffsetDateTime fourDaysAgo = OffsetDateTime.now(ZoneOffset.UTC).minusDays(4);
+        try (Connection owner = ownerConn();
+             PreparedStatement ps = owner.prepareStatement(
+                     "UPDATE tenant_subscriptions SET status = 'grace', expires_at = ? "
+                             + "WHERE tenant_id = ?::uuid")) {
+            ps.setObject(1, fourDaysAgo);
+            ps.setString(2, tenantId);
+            assertTrue(ps.executeUpdate() == 1);
+        }
+
+        expiryScheduler.runOnce();
+
+        assertEquals("expired", readSubStatus(tenantId), "grace → expired after grace window");
+        verify(emailSender, timeout(5_000)).send(
+                eq("owner@ph-expired.test"),
+                contains("expired"),
+                anyString());
+    }
+
+    @Test
+    void expiryScanIsNoopWhenSubscriptionsAreCurrent() throws Exception {
+        String tenantId = signup("ph-current", "owner@ph-current.test");
+        login("ph-current", "owner@ph-current.test");
+        waitForSubscription(tenantId);
+
+        expiryScheduler.runOnce();
+
+        assertEquals("trialing", readSubStatus(tenantId), "fresh trial stays trialing");
+        // No interaction with email for "trial just ended" wording.
+        verify(emailSender, never()).send(anyString(), contains("trial just ended"), anyString());
     }
 
     // ===== NOTIFICATIONS — public-website order fans out to merchant ========
@@ -712,6 +795,44 @@ class PublicSiteFlowTest {
             ps.setString(1, tenantSlug);
             try (ResultSet rs = ps.executeQuery()) {
                 assertTrue(rs.next(), "expected one tenant_sites row for slug=" + tenantSlug);
+                return rs.getString(1);
+            }
+        }
+    }
+
+    /**
+     * Polls until the trial-subscription row lands. Signup fires the listener
+     * via {@code @Async} AFTER_COMMIT, so the row may not exist immediately
+     * after the HTTP response.
+     */
+    private void waitForSubscription(String tenantId) throws Exception {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (System.currentTimeMillis() < deadline) {
+            try (Connection owner = ownerConn();
+                 PreparedStatement ps = owner.prepareStatement(
+                         "SELECT count(*) FROM tenant_subscriptions WHERE tenant_id = ?::uuid")) {
+                ps.setString(1, tenantId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    if (rs.getInt(1) >= 1) {
+                        return;
+                    }
+                }
+            }
+            Thread.sleep(50);
+        }
+        throw new IllegalStateException("trial subscription never landed for tenant " + tenantId);
+    }
+
+    /** Reads the current status of the live subscription for a tenant. */
+    private String readSubStatus(String tenantId) throws SQLException {
+        try (Connection owner = ownerConn();
+             PreparedStatement ps = owner.prepareStatement(
+                     "SELECT status FROM tenant_subscriptions WHERE tenant_id = ?::uuid "
+                             + "ORDER BY started_at DESC LIMIT 1")) {
+            ps.setString(1, tenantId);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next(), "expected a subscription row for " + tenantId);
                 return rs.getString(1);
             }
         }

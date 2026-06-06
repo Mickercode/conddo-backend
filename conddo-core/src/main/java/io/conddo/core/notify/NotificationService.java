@@ -90,6 +90,65 @@ public class NotificationService {
         return s == null ? "" : s;
     }
 
+    /**
+     * Alerts a merchant when their subscription transitions
+     * (BILLING_TIERS_SPEC §6). Two transitions are merchant-visible:
+     * {@code trialing/active → grace} (kindly: "your trial ended, here's a
+     * grace window to add payment") and {@code grace → expired} (sharper:
+     * "your access is paused; reactivate to resume"). Both channels
+     * best-effort; the cron has already committed the state change.
+     */
+    public void sendPlanTransition(String toEmail, String toPhone, String businessName,
+                                   String planName, String toStatus, int gracePeriodDays) {
+        if ((toEmail == null || toEmail.isBlank()) && (toPhone == null || toPhone.isBlank())) {
+            return;
+        }
+        String subject;
+        String text;
+        String sms;
+        String biz = nullSafe(businessName);
+        String plan = nullSafe(planName);
+        switch (toStatus) {
+            case "grace" -> {
+                subject = "Your conddo.io trial just ended";
+                text = "Hi " + biz + ",\n\n"
+                        + "Your " + plan + " trial just ended. You're in a "
+                        + gracePeriodDays + "-day grace period — add a payment method "
+                        + "to keep your conddo.io features running.\n\n"
+                        + "Add payment: " + appBaseUrl + "/settings/billing\n\n"
+                        + "— Conddo";
+                sms = "Your conddo.io " + plan + " trial ended. " + gracePeriodDays
+                        + "-day grace period — add payment at " + appBaseUrl + "/settings/billing";
+            }
+            case "expired" -> {
+                subject = "Your conddo.io subscription has expired";
+                text = "Hi " + biz + ",\n\n"
+                        + "Your " + plan + " subscription has expired and your conddo.io "
+                        + "site is paused. Reactivate to restore access to your customers.\n\n"
+                        + "Reactivate: " + appBaseUrl + "/settings/billing\n\n"
+                        + "— Conddo";
+                sms = "Your conddo.io " + plan + " subscription expired. Reactivate at "
+                        + appBaseUrl + "/settings/billing";
+            }
+            default -> {
+                // Other states (cancelled-completion etc.) stay silent.
+                return;
+            }
+        }
+        if (toEmail != null && !toEmail.isBlank()) {
+            try {
+                emailSender.send(toEmail, subject, text);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (toPhone != null && !toPhone.isBlank()) {
+            try {
+                smsSender.send(toPhone, sms);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
     /** Password reset — delivers the reset token (and a reset link) by email. */
     public void sendPasswordReset(String toEmail, String resetToken) {
         String subject = "Reset your Conddo password";
