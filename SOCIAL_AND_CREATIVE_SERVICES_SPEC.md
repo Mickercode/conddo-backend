@@ -18,6 +18,40 @@ designed assets each month.
 
 ## 1. Vendor / API decisions (up front)
 
+**RECOMMENDED**: Use **Ayrshare** (https://www.ayrshare.com) as a unified
+API gateway. One integration, all platforms, no per-platform app review
+wait. This was the original section's plan; we kept the native-integration
+detail below as a fallback in case Ayrshare doesn't work out at scale.
+
+### Option A (preferred) — Ayrshare API gateway
+
+| Channel | Auth via Ayrshare | What we get |
+|---|---|---|
+| Facebook Page, Instagram Business, LinkedIn (personal + company), X, TikTok, YouTube, Pinterest, Reddit, GMB, Telegram, Bluesky, Threads | Each tenant becomes an **Ayrshare User Profile** ("sub-account") on our master Business/Enterprise account. The tenant connects each platform via Ayrshare's hosted connect UI (we redirect to it from our Connected Accounts page or embed it in an iframe). | A single POST endpoint (`POST https://api.ayrshare.com/api/post`) with `{post, platforms: [...], mediaUrls: [...], scheduleDate}` fans out to every selected platform. Ayrshare handles OAuth refresh, provider-specific quirks (IG Reels containers, X char limits, LinkedIn URN formats), media re-encoding, and rate limits. |
+
+**Why this is a much better answer than native**:
+- No Meta App Review wall-clock — Ayrshare already has approved app status,
+  we ride on theirs. Go-live in **days**, not weeks.
+- No LinkedIn Marketing Developer application required.
+- No per-platform posting code in our backend — one HTTP call.
+- Analytics + DM + comments + post history all in one API.
+- Brand assets (logo URLs, captions saved as templates) supported.
+
+**Cost** (Q2 2026 pricing — verify before committing):
+- Business plan ~$149/month covers ~10 user profiles + unlimited posts.
+- Enterprise scales to higher profile counts; per-tenant cost is the
+  meaningful unit when we cross ~10 active social tenants.
+
+**Per-tenant cost recovery**: bake the average ~$1-2/month/tenant Ayrshare
+cost into the Growth plan's gross margin (Growth is already where
+`social_scheduler` is gated). Launcher tenants don't get Ayrshare-backed
+posting; their `media_library` works locally without it.
+
+### Option B (fallback) — Native per-platform integrations
+
+Kept here as a reference in case Ayrshare's terms / scale don't fit.
+Skip this section if going Ayrshare-first.
+
 | Channel | API | Auth | What we need |
 |---|---|---|---|
 | Facebook Page | Meta Graph API (`graph.facebook.com`) | OAuth2; page access token (long-lived ~60d) | Read pages, post photos/text/video, schedule via `scheduled_publish_time` |
@@ -26,10 +60,10 @@ designed assets each month.
 | X (Twitter) | X API v2 | OAuth2 user context | Tweet, schedule (no native scheduling — we do it ourselves) |
 | TikTok | TikTok Login Kit + TikTok Posts API | OAuth2 | Direct-post video |
 
-**Phase 1 channels**: Facebook + Instagram (one Meta app covers both). LinkedIn next.
-X + TikTok in Phase 2.
+**Phase 1 channels** (native path): Facebook + Instagram (one Meta app covers
+both). LinkedIn next. X + TikTok in Phase 2.
 
-**App registration prerequisites** (BLOCKING — do these first):
+**App registration prerequisites** (BLOCKING — native path only):
 - Meta: register a Meta app, get `App ID` + `App Secret`, request App Review for
   `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`,
   `pages_read_engagement`. **App Review takes 2-4 weeks.**
@@ -38,9 +72,43 @@ X + TikTok in Phase 2.
 - All app secrets land in Render env (`META_APP_ID`, `META_APP_SECRET`,
   `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`).
 
+### Env vars (Ayrshare path)
+
+In Render (sync:false):
+- `AYRSHARE_API_KEY` — master API key for our Business/Enterprise account
+- `AYRSHARE_WEBHOOK_SECRET` — for incoming delivery / engagement webhooks
+- `CONDDO_SOCIAL_TOKEN_KEY` (32-byte) — still used to encrypt the per-tenant
+  Ayrshare profile key at rest (in `social_accounts.access_token`)
+
 ---
 
 ## 2. Connect flow — tenant attaches a social account
+
+> **Ayrshare path adjustment to the schema below**: with Ayrshare, the
+> shape is simpler — one row per tenant, not one row per (tenant,
+> provider). Replace `social_accounts` with:
+>
+> ```sql
+> CREATE TABLE tenant_social_profile (
+>     tenant_id              UUID PRIMARY KEY REFERENCES tenants(id),
+>     ayrshare_profile_key   TEXT NOT NULL,     -- encrypted at rest
+>     ayrshare_user_id       VARCHAR(120),      -- profile id Ayrshare returns
+>     connected_platforms    JSONB NOT NULL DEFAULT '[]',  -- ["facebook","instagram",...]
+>     last_synced_at         TIMESTAMPTZ,
+>     created_at, updated_at
+> );
+> ```
+>
+> Connect flow becomes: BE calls Ayrshare `POST /api/profiles` to create
+> a profile if the tenant doesn't have one, stores the returned key, and
+> returns the hosted connect URL (`https://app.ayrshare.com/social/{token}`).
+> Tenant authorises each provider inside Ayrshare's hosted dialog. We poll
+> Ayrshare's `/user` endpoint after redirect to refresh
+> `connected_platforms`.
+>
+> The Option B native shape below remains as the fallback.
+
+
 
 ```
 Tenant Settings → Connected Accounts → "Connect Facebook"
@@ -390,20 +458,40 @@ with an active marketing surface.
 
 ## 12. Phasing
 
-**Phase 1 (weekend after launch)**: Meta app registration started (so the
-~3-week App Review clock starts now), the BE schema is locked in via migrations,
-the connect / disconnect endpoints work in dev with a sandbox FB app. FE:
-restore Connected Accounts page from "Coming soon" → real connect buttons
-(disabled until App Review approves; copy: "Awaiting Meta approval").
+### Ayrshare path (recommended, ~1 week per phase)
 
-**Phase 2 (3-4 weeks out)**: scheduling + publishing live for FB + IG. Media
-library live. Creative service requests live (per-job pay).
+**Phase 1 (this sprint, ~1 week)**: Sign up for Ayrshare Business, store
+the master `AYRSHARE_API_KEY`. Schema lands (`social_accounts`,
+`social_posts`, `social_post_targets`). Ship the connect endpoint
+(creates an Ayrshare User Profile per tenant, returns the hosted
+connect URL). Ship the schedule endpoint (proxies to Ayrshare's
+`/api/post`). FE Connected Accounts page already shipped — the BE
+flips the provider `status` from `pending_approval` → `live` and the
+Connect button starts opening the Ayrshare hosted dialog.
 
-**Phase 3 (6-8 weeks out)**: LinkedIn. Brand Package subscriptions.
-Dashboard widgets. Studio admin tools for managing creative offerings.
+**Phase 2 (~1 week)**: Media library + creative service requests live.
+Scheduling + publishing covers FB + IG + LinkedIn + X + TikTok + YouTube
++ Pinterest + GMB all at once (Ayrshare covers them as one API).
 
-**Phase 4 (later)**: X, TikTok, ad management, analytics rollup.
+**Phase 3 (~2 weeks)**: Brand Package subscriptions. Dashboard widgets.
+Studio admin tools for creative offerings.
 
-The 2-4 week App Review delay is the **only blocker on the critical path**.
-Everything else is pure engineering. Submit the Meta + LinkedIn apps for
-review the moment the schema lands in dev so the wall-clock starts ticking.
+**Phase 4**: Analytics rollup (Ayrshare provides post-level analytics —
+we just aggregate + present).
+
+### Native path (fallback only)
+
+**Phase 1**: Meta app registration starts (~3-week App Review clock),
+schema lands, connect/disconnect endpoints work in dev. FE buttons
+stay disabled with "Awaiting Meta approval".
+
+**Phase 2 (3-4 wks)**: FB + IG live after App Review.
+
+**Phase 3 (6-8 wks)**: LinkedIn (separate Marketing Developer Platform
+approval). Brand Packages.
+
+**Phase 4**: X, TikTok, ads, analytics.
+
+The 2-4 week App Review delay is the **only blocker on the critical path**
+of the native path. If we go native, submit Meta + LinkedIn apps the day
+the BE schema lands so the wall-clock starts ticking.
