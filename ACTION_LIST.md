@@ -490,35 +490,49 @@ a valid session — never touching a password.
 - Background jobs (persisted, retried) and an internal event bus (Redis Pub/Sub)
   so modules stay decoupled.
 
-### 7b. Social media integrations + Creative services + Brand packages — `conddo-social` (or in-API module) ⬜ TODO (P1 for V1.1)
+### 7b. Social integrations (via Ayrshare) + Creative services + Brand packages — `conddo-social` (or in-API module) ⬜ TODO (P1 for V1.1)
 **Spec**: [SOCIAL_AND_CREATIVE_SERVICES_SPEC.md](./SOCIAL_AND_CREATIVE_SERVICES_SPEC.md)
-— the full vision (social_accounts OAuth + scheduling, media library,
+— full vision (Ayrshare gateway integration, scheduling, media library,
 creative_service_requests routed to Studio as jobs, monthly brand_package
 subscriptions). FE shipped the "Connected Accounts" shell on 2026-06-05
-with `pending_approval` / `coming_soon` states for every provider; the
-flag-flip swaps disabled → live the moment OAuth lands.
+with `pending_approval` states for every provider; flipping a provider's
+status to live on the BE swaps the disabled chip → "Connect" button that
+opens Ayrshare's hosted-connect dialog.
 
-**⚠ Critical-path wall-clock dependency**: Meta App Review (Facebook +
-Instagram, ~2-4 weeks) and LinkedIn Marketing Developer Platform approval
-(separate access tier, also weeks). **Submit both the day this spec hits
-the BE backlog** — engineering work is unblocked but launch is blocked
-on provider approval. The Meta app needs `pages_manage_posts`,
-`instagram_basic`, `instagram_content_publish`, `pages_read_engagement`.
+**Vendor decision: Ayrshare API gateway** ([ayrshare.com](https://www.ayrshare.com)).
+One integration covers Facebook, Instagram, LinkedIn, X, TikTok, YouTube,
+Pinterest, GMB, Threads, Bluesky, Telegram, Reddit. No per-platform app
+review on our side — we ride on Ayrshare's approved app status.
 
-Phase 1 (the BE handoff for THIS sprint):
-- Register the Meta developer app + start App Review submission (devops).
-- Register the LinkedIn developer app + apply for Marketing API access.
-- Ship the `social_accounts` table + the OAuth-initiate + callback
-  endpoints behind a feature flag — wire the FE Connect buttons that
-  are currently disabled with `pending_approval` chips. Day Meta
-  approves, flip the flag.
-- Per the spec §1, env vars needed in Render (sync:false): `META_APP_ID`,
-  `META_APP_SECRET`, `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`,
-  `CONDDO_SOCIAL_TOKEN_KEY` (32-byte envelope key for token encryption).
+**Master API key is already in hand** — ask product (David). The BE team
+just needs to drop it into Render as `AYRSHARE_API_KEY` and start hitting
+`https://api.ayrshare.com/api/*`. No Meta or LinkedIn developer app to
+register on our side, no OAuth code paths to write.
 
-Phase 2 onward: scheduling cron + posting via provider APIs + media
-library + creative_service_requests + brand_package subscriptions
-(all detailed in the spec).
+**Phase 1 BE work for this sprint** (the explicit handoff):
+1. Set `AYRSHARE_API_KEY` in Render (sync:false). Get the value from
+   product.
+2. Generate + set `AYRSHARE_WEBHOOK_SECRET` and configure Ayrshare's
+   dashboard to fire webhooks at `POST https://api.conddo.io/webhooks/ayrshare`
+   (HMAC-signed). Also configure the post-OAuth redirect URL in Ayrshare's
+   dashboard to `https://app.conddo.io/settings/connections?reconnect=1`.
+3. Generate + set `CONDDO_SOCIAL_TOKEN_KEY` (32 bytes random) for at-rest
+   encryption of each tenant's Ayrshare `profileKey`.
+4. Ship `tenant_social_profile` schema (one row per tenant — full DDL in
+   spec §2). NOT one row per provider — Ayrshare bundles all connections
+   under one User Profile per tenant.
+5. Implement endpoints in spec §3 table — six tenant-facing routes plus
+   the `/webhooks/ayrshare` handler. The connect-link endpoint is the
+   critical one: provisions a tenant's Ayrshare profile on first call,
+   returns the hosted-connect URL the FE redirects to.
+6. Wire `social_scheduler` feature gate (Growth+) per BILLING_TIERS_SPEC.md
+   §5 — Launcher tenants get 403 PLAN_UPGRADE_REQUIRED on the
+   connect-link endpoint.
+
+Phase 2 onward: scheduling via Ayrshare's `scheduleDate` param +
+webhook-driven status updates, media library, creative_service_requests
+routed to Studio, brand_package monthly subscriptions (all detailed in
+spec §3-§6). Phase 4: analytics rollup using Ayrshare's per-post analytics.
 
 ### 7. Billing (PRD §14)
 **Spec**: [BILLING_TIERS_SPEC.md](./BILLING_TIERS_SPEC.md) — Launcher / Growth

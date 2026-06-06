@@ -16,152 +16,150 @@ designed assets each month.
 
 ---
 
-## 1. Vendor / API decisions (up front)
+## 1. Vendor — Ayrshare API gateway (decided)
 
-**RECOMMENDED**: Use **Ayrshare** (https://www.ayrshare.com) as a unified
-API gateway. One integration, all platforms, no per-platform app review
-wait. This was the original section's plan; we kept the native-integration
-detail below as a fallback in case Ayrshare doesn't work out at scale.
+**Decision is made**. We integrate via [Ayrshare](https://www.ayrshare.com),
+which gives us a unified API across every channel we care about. **Our
+master API key is already in hand** — product holds it, BE just needs to
+drop it into Render secrets as `AYRSHARE_API_KEY` and start hitting the
+gateway. No per-platform app review, no OAuth code paths to write, no
+provider-specific posting quirks for us to maintain.
 
-### Option A (preferred) — Ayrshare API gateway
+### What Ayrshare covers in one API
 
-| Channel | Auth via Ayrshare | What we get |
+| Channel | Notes |
+|---|---|
+| Facebook Page | Posts, media, scheduling |
+| Instagram Business | Photos, carousels, Reels |
+| LinkedIn (personal + Company Page) | Shares |
+| X (Twitter) | Tweets, threads, media |
+| TikTok | Direct video posts |
+| YouTube | Shorts + standard video |
+| Pinterest | Pins + boards |
+| GMB (Google Business) | Posts |
+| Threads, Bluesky, Telegram, Reddit | Bonus channels, same API |
+
+One endpoint, `POST https://api.ayrshare.com/api/post`, takes
+`{post, platforms[], mediaUrls[], scheduleDate}` and fans out. Ayrshare
+handles OAuth refresh, IG Reels containers, X char limits, LinkedIn URN
+formats, media re-encoding, and rate limits. We never touch a Meta or
+LinkedIn token.
+
+### Tenant model in Ayrshare
+
+Each tenant becomes an **Ayrshare User Profile** under our master account.
+- BE calls `POST https://api.ayrshare.com/api/profiles` once per tenant
+  to provision a User Profile; stores the returned `profileKey`
+  (encrypted) in `tenant_social_profile` (schema in §2).
+- Tenant clicks "Connect Facebook" on our `/settings/connections` page →
+  BE fetches a fresh hosted-connect URL via Ayrshare
+  (`GET /api/profiles/connectLink?profileKey=...`) → FE redirects the
+  tenant to that URL → Ayrshare's hosted dialog handles every
+  provider-specific OAuth dance → tenant lands back on our Settings page.
+- After the redirect, BE calls `GET /api/user?profileKey=...` to refresh
+  `connected_platforms` (a JSONB array on `tenant_social_profile`) so the
+  Connect button on our FE updates to "Connected" without a page reload.
+
+### Cost note
+
+Pricing (verify before sign-up): Business plan ~$149/month covers ~10
+user profiles + unlimited posts; Enterprise scales beyond. **Per-tenant
+incremental cost** is the meaningful unit once we cross ~10 active
+social-using tenants. Bake the ~$1-2/month/tenant marginal cost into
+Growth-plan gross margin — `social_scheduler` is already a Growth-gated
+feature, so Launcher tenants don't trigger the meter.
+
+### Env vars in Render (sync:false)
+
+| Var | Source | Use |
 |---|---|---|
-| Facebook Page, Instagram Business, LinkedIn (personal + company), X, TikTok, YouTube, Pinterest, Reddit, GMB, Telegram, Bluesky, Threads | Each tenant becomes an **Ayrshare User Profile** ("sub-account") on our master Business/Enterprise account. The tenant connects each platform via Ayrshare's hosted connect UI (we redirect to it from our Connected Accounts page or embed it in an iframe). | A single POST endpoint (`POST https://api.ayrshare.com/api/post`) with `{post, platforms: [...], mediaUrls: [...], scheduleDate}` fans out to every selected platform. Ayrshare handles OAuth refresh, provider-specific quirks (IG Reels containers, X char limits, LinkedIn URN formats), media re-encoding, and rate limits. |
+| `AYRSHARE_API_KEY` | **Already in hand — ask product** | Master API key sent on every request as `Authorization: Bearer ...` |
+| `AYRSHARE_WEBHOOK_SECRET` | Generate in Ayrshare dashboard | HMAC signature on incoming delivery / engagement webhooks |
+| `CONDDO_SOCIAL_TOKEN_KEY` | Generate 32 bytes random | Envelope key for at-rest encryption of each tenant's Ayrshare `profileKey` |
 
-**Why this is a much better answer than native**:
-- No Meta App Review wall-clock — Ayrshare already has approved app status,
-  we ride on theirs. Go-live in **days**, not weeks.
-- No LinkedIn Marketing Developer application required.
-- No per-platform posting code in our backend — one HTTP call.
-- Analytics + DM + comments + post history all in one API.
-- Brand assets (logo URLs, captions saved as templates) supported.
+### Native per-platform path — abandoned
 
-**Cost** (Q2 2026 pricing — verify before committing):
-- Business plan ~$149/month covers ~10 user profiles + unlimited posts.
-- Enterprise scales to higher profile counts; per-tenant cost is the
-  meaningful unit when we cross ~10 active social tenants.
-
-**Per-tenant cost recovery**: bake the average ~$1-2/month/tenant Ayrshare
-cost into the Growth plan's gross margin (Growth is already where
-`social_scheduler` is gated). Launcher tenants don't get Ayrshare-backed
-posting; their `media_library` works locally without it.
-
-### Option B (fallback) — Native per-platform integrations
-
-Kept here as a reference in case Ayrshare's terms / scale don't fit.
-Skip this section if going Ayrshare-first.
-
-| Channel | API | Auth | What we need |
-|---|---|---|---|
-| Facebook Page | Meta Graph API (`graph.facebook.com`) | OAuth2; page access token (long-lived ~60d) | Read pages, post photos/text/video, schedule via `scheduled_publish_time` |
-| Instagram Business | Meta Graph API (IG Graph) | Same OAuth flow as FB; IG account linked to a FB Page | Container-then-publish flow for media |
-| LinkedIn Company Page | LinkedIn Marketing Developer Platform | OAuth2 with `r_organization_social`, `w_organization_social` | Share posts on a Company Page (UGC API) |
-| X (Twitter) | X API v2 | OAuth2 user context | Tweet, schedule (no native scheduling — we do it ourselves) |
-| TikTok | TikTok Login Kit + TikTok Posts API | OAuth2 | Direct-post video |
-
-**Phase 1 channels** (native path): Facebook + Instagram (one Meta app covers
-both). LinkedIn next. X + TikTok in Phase 2.
-
-**App registration prerequisites** (BLOCKING — native path only):
-- Meta: register a Meta app, get `App ID` + `App Secret`, request App Review for
-  `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`,
-  `pages_read_engagement`. **App Review takes 2-4 weeks.**
-- LinkedIn: create a developer app, apply for the Marketing Developer Platform
-  (separate access tier from regular OAuth). **Approval takes weeks.**
-- All app secrets land in Render env (`META_APP_ID`, `META_APP_SECRET`,
-  `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`).
-
-### Env vars (Ayrshare path)
-
-In Render (sync:false):
-- `AYRSHARE_API_KEY` — master API key for our Business/Enterprise account
-- `AYRSHARE_WEBHOOK_SECRET` — for incoming delivery / engagement webhooks
-- `CONDDO_SOCIAL_TOKEN_KEY` (32-byte) — still used to encrypt the per-tenant
-  Ayrshare profile key at rest (in `social_accounts.access_token`)
+A native Meta/LinkedIn/X/TikTok per-provider OAuth integration was the
+original plan. We're not doing it. If circumstances ever change (Ayrshare
+goes down, terms break, etc.), pull the older revision of this file from
+git (commit `526bc3b`) for the native fallback details.
 
 ---
 
-## 2. Connect flow — tenant attaches a social account
-
-> **Ayrshare path adjustment to the schema below**: with Ayrshare, the
-> shape is simpler — one row per tenant, not one row per (tenant,
-> provider). Replace `social_accounts` with:
->
-> ```sql
-> CREATE TABLE tenant_social_profile (
->     tenant_id              UUID PRIMARY KEY REFERENCES tenants(id),
->     ayrshare_profile_key   TEXT NOT NULL,     -- encrypted at rest
->     ayrshare_user_id       VARCHAR(120),      -- profile id Ayrshare returns
->     connected_platforms    JSONB NOT NULL DEFAULT '[]',  -- ["facebook","instagram",...]
->     last_synced_at         TIMESTAMPTZ,
->     created_at, updated_at
-> );
-> ```
->
-> Connect flow becomes: BE calls Ayrshare `POST /api/profiles` to create
-> a profile if the tenant doesn't have one, stores the returned key, and
-> returns the hosted connect URL (`https://app.ayrshare.com/social/{token}`).
-> Tenant authorises each provider inside Ayrshare's hosted dialog. We poll
-> Ayrshare's `/user` endpoint after redirect to refresh
-> `connected_platforms`.
->
-> The Option B native shape below remains as the fallback.
-
-
+## 2. Connect flow — tenant attaches social accounts via Ayrshare
 
 ```
-Tenant Settings → Connected Accounts → "Connect Facebook"
+Tenant Settings → Connected Accounts → "Connect Facebook"  (or any other channel)
    ↓
-Pop a Facebook OAuth dialog (FE redirects to graph.facebook.com/oauth/...
-with our app ID, redirect URI = https://api.conddo.io/oauth/meta/callback,
-state token tied to tenant_id + user_id, scopes as above)
+FE: POST /api/v1/marketing/social/connect-link  {provider: "facebook"}
    ↓
-Meta redirects back with ?code=...&state=...
+BE: lookup tenant_social_profile for this tenant.
+    - If no row yet → POST https://api.ayrshare.com/api/profiles
+      with `{title: tenant.name}` to create the profile. Store the
+      returned `profileKey` + `profileTitle` in tenant_social_profile.
+    - If row exists → reuse the existing profileKey.
+   Then: GET https://api.ayrshare.com/api/profiles/connectLink
+         ?profileKey=...   (returns a one-time hosted-connect URL)
    ↓
-BE exchanges code for a short-lived user token, then exchanges that for a
-long-lived (~60-day) token, fetches the list of Pages the user manages,
-fetches each page's page access token (long-lived) + the linked Instagram
-Business Account id (if any)
+BE response: { connectUrl: "https://app.ayrshare.com/social/..." }
    ↓
-BE stores: { tenant_id, provider: 'facebook'|'instagram'|'linkedin',
-external_id, name, access_token (encrypted), refresh_token (where
-applicable), token_expires_at, scopes }
+FE: window.location = connectUrl (or open in a new tab)
    ↓
-Frontend re-renders Connected Accounts with the page name + a green
-"Connected" pill + a "Disconnect" button.
+Tenant authorises the platform inside Ayrshare's hosted dialog.
+Ayrshare lands them back on a URL we configured in their dashboard
+(suggested: https://app.conddo.io/settings/connections?reconnect=1).
+   ↓
+On the return, FE re-fetches GET /api/v1/marketing/social/accounts.
+BE refreshes connected_platforms by calling
+  GET https://api.ayrshare.com/api/user?profileKey=...
+and returns the updated list.
+   ↓
+FE re-renders the provider rows: green "Connected" pill + "Disconnect" button.
 ```
 
-### Schema
+### Schema (one table — Ayrshare bundles all connections under one profile)
 
 ```sql
-CREATE TABLE social_accounts (
-    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id            UUID NOT NULL REFERENCES tenants(id),
-    provider             VARCHAR(20) NOT NULL,   -- 'facebook' | 'instagram' | 'linkedin' | 'x' | 'tiktok'
-    external_id          VARCHAR(255) NOT NULL,  -- Page id / IG user id / LinkedIn URN
-    external_name        VARCHAR(255),           -- "Seb&Bayor Pharmaceuticals" — for the UI
-    access_token         TEXT NOT NULL,          -- encrypted at rest (pgcrypto / app-level AES-GCM)
-    refresh_token        TEXT,
-    token_expires_at     TIMESTAMPTZ,            -- triggers re-auth notice in the UI
-    scopes               TEXT[],
-    connected_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    revoked_at           TIMESTAMPTZ,
-    UNIQUE (tenant_id, provider, external_id)
+CREATE TABLE tenant_social_profile (
+    tenant_id              UUID PRIMARY KEY REFERENCES tenants(id),
+    ayrshare_profile_key   TEXT NOT NULL,                   -- AES-GCM encrypted at rest
+    ayrshare_profile_title VARCHAR(160),                    -- mirrors tenant.name when created
+    connected_platforms    JSONB NOT NULL DEFAULT '[]',     -- ["facebook","instagram",...]
+    last_synced_at         TIMESTAMPTZ,                     -- last successful /api/user refresh
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
-Tokens are encrypted with an envelope key stored in Render secrets
-(`CONDDO_SOCIAL_TOKEN_KEY`, 32 bytes). Rotate by re-encrypting on schedule;
-the BE keeps a `key_version` byte prefix on each ciphertext.
+`ayrshare_profile_key` is encrypted with the envelope key in
+`CONDDO_SOCIAL_TOKEN_KEY` (32 bytes). Use a `key_version` byte prefix on
+each ciphertext so we can rotate keys later without a data migration.
 
-### Token refresh + invalidation
+### Disconnect
 
-- A nightly job (`@Scheduled`) checks `token_expires_at < now() + 7d` and refreshes
-  where the provider supports it. Failures flip `revoked_at` and emit a
-  notification to the tenant: "Reconnect Facebook to keep posting."
-- Provider webhooks (where available) for explicit revocations also flip `revoked_at`.
-- The post-scheduler refuses to send to any account where `revoked_at IS NOT NULL`.
+`POST /api/v1/marketing/social/accounts/{provider}/disconnect` →
+BE calls `DELETE https://api.ayrshare.com/api/social/unlink` with the
+profileKey + provider — Ayrshare revokes that one channel and leaves
+the others connected. BE then refreshes `connected_platforms` from
+Ayrshare's `/api/user` and writes it back.
+
+### Webhook for status changes
+
+Ayrshare can fire webhooks when a user disconnects from their end, when
+a token goes stale, or on post delivery. Wire `AYRSHARE_WEBHOOK_SECRET`
+into Ayrshare's dashboard and expose:
+
+```
+POST /webhooks/ayrshare    (no auth — verify the HMAC signature header)
+```
+
+Handle these event types:
+- `account.disconnected` → refresh connected_platforms; notify tenant if
+  this breaks any scheduled posts.
+- `account.token.refresh.failed` → flag the tenant; the next scheduled
+  post to that channel fails fast with a "Reconnect" CTA.
+- `post.published` / `post.failed` → update `social_post_targets.status`
+  + `external_post_id` + `error_message` (schema in §3).
 
 ---
 
@@ -200,25 +198,57 @@ CREATE TABLE social_post_targets (
 
 ### Endpoints
 
-| Method | Path | Returns |
-|---|---|---|
-| GET    | `/api/v1/marketing/social/accounts` | `SocialAccount[]` |
-| POST   | `/api/v1/marketing/social/accounts/{provider}/connect` | `{authUrl}` (OAuth redirect URL) |
-| POST   | `/api/v1/marketing/social/accounts/{id}/disconnect` | 204 |
-| GET    | `/api/v1/marketing/social/posts?status=&from=&to=` | `SocialPost[]` |
-| POST   | `/api/v1/marketing/social/posts` | `SocialPost` (created) |
-| PATCH  | `/api/v1/marketing/social/posts/{id}` | `SocialPost` (only `status=draft` posts are editable) |
-| DELETE | `/api/v1/marketing/social/posts/{id}` | 204 (cancels schedule) |
-| POST   | `/api/v1/marketing/social/posts/{id}/publish-now` | `SocialPost` |
+| Method | Path | Returns | Notes |
+|---|---|---|---|
+| GET    | `/api/v1/marketing/social/accounts` | `{platforms: [{provider, connected: boolean, externalName?}]}` | Reads `tenant_social_profile.connected_platforms`; refresh from Ayrshare's `/api/user` if `last_synced_at` > 10 min |
+| POST   | `/api/v1/marketing/social/connect-link` | `{connectUrl}` | Creates the tenant's Ayrshare profile on first call; returns the hosted-connect URL |
+| POST   | `/api/v1/marketing/social/accounts/{provider}/disconnect` | 204 | Calls Ayrshare's `/api/social/unlink` for that one provider |
+| GET    | `/api/v1/marketing/social/posts?status=&from=&to=` | `SocialPost[]` | |
+| POST   | `/api/v1/marketing/social/posts` | `SocialPost` (created) | If `scheduled_at <= now() + 1 minute`, publish immediately via Ayrshare; otherwise store as `scheduled` |
+| PATCH  | `/api/v1/marketing/social/posts/{id}` | `SocialPost` | Only `status='scheduled'` posts are editable |
+| DELETE | `/api/v1/marketing/social/posts/{id}` | 204 | Cancels schedule (also delete from Ayrshare if it has a `scheduledPostId`) |
+| POST   | `/api/v1/marketing/social/posts/{id}/publish-now` | `SocialPost` | Immediate publish |
+| POST   | `/webhooks/ayrshare` | 200 | Status changes from Ayrshare (see §2 — disconnect, token failure, post.published, post.failed) |
 
-### The publish job
+### Publish via Ayrshare
 
-A `@Scheduled` job runs every minute, picks up `social_posts` with
-`status='scheduled' AND scheduled_at <= now()`, sets each one's status to
-`publishing`, fans out to the provider APIs in parallel for each target,
-and writes results back to `social_post_targets`. Failures: keep `social_post`
-status as `scheduled` and retry up to 3 times on a 5-minute backoff before
-flipping to `failed` and notifying the tenant.
+Single endpoint, no per-provider code:
+
+```
+POST https://api.ayrshare.com/api/post
+Headers: Authorization: Bearer ${AYRSHARE_API_KEY}
+Body: {
+  post:        social_posts.caption,
+  platforms:   ["facebook", "instagram", "linkedin", ...],   // from social_post_targets
+  mediaUrls:   ["https://res.cloudinary.com/..."],          // pre-uploaded to Cloudinary (§4)
+  profileKey:  tenant_social_profile.ayrshare_profile_key,  // identifies the tenant
+  scheduleDate: scheduled_at.toISOString()                  // omit for immediate
+}
+```
+
+Ayrshare responds with one entry per platform `{id, postUrl, status,
+errors[]}`. Write that into `social_post_targets`:
+- success → `status='published'`, `external_post_id=...`, `published_at=now()`
+- failure → `status='failed'`, `error_message=...`
+
+### Two scheduling strategies — pick one
+
+**Strategy A (Ayrshare-side scheduling, recommended)**: send the post with
+`scheduleDate` and let Ayrshare publish at the requested time. Our BE
+stores the `scheduledPostId` Ayrshare returns and listens for
+`post.published` / `post.failed` webhooks to update the row. **Pros**:
+no cron on our side, no scheduling drift, no orphan posts if our BE is
+down at the wrong minute. **Cons**: cancel-after-schedule means a DELETE
+to Ayrshare's `/api/post/{id}`.
+
+**Strategy B (our-side cron)**: store posts as `status='scheduled'` and
+run a `@Scheduled` job every minute that picks up due posts and fires
+them immediately via Ayrshare. **Pros**: simpler cancellation. **Cons**:
+duplicates Ayrshare's scheduler; needs idempotency on retry.
+
+**Recommendation: Strategy A** unless the BE team has a strong
+preference for owning the schedule. Cancellation via Ayrshare's DELETE
+is one extra HTTP call.
 
 ---
 
