@@ -490,6 +490,36 @@ a valid session — never touching a password.
 - Background jobs (persisted, retried) and an internal event bus (Redis Pub/Sub)
   so modules stay decoupled.
 
+### 7b. Social media integrations + Creative services + Brand packages — `conddo-social` (or in-API module) ⬜ TODO (P1 for V1.1)
+**Spec**: [SOCIAL_AND_CREATIVE_SERVICES_SPEC.md](./SOCIAL_AND_CREATIVE_SERVICES_SPEC.md)
+— the full vision (social_accounts OAuth + scheduling, media library,
+creative_service_requests routed to Studio as jobs, monthly brand_package
+subscriptions). FE shipped the "Connected Accounts" shell on 2026-06-05
+with `pending_approval` / `coming_soon` states for every provider; the
+flag-flip swaps disabled → live the moment OAuth lands.
+
+**⚠ Critical-path wall-clock dependency**: Meta App Review (Facebook +
+Instagram, ~2-4 weeks) and LinkedIn Marketing Developer Platform approval
+(separate access tier, also weeks). **Submit both the day this spec hits
+the BE backlog** — engineering work is unblocked but launch is blocked
+on provider approval. The Meta app needs `pages_manage_posts`,
+`instagram_basic`, `instagram_content_publish`, `pages_read_engagement`.
+
+Phase 1 (the BE handoff for THIS sprint):
+- Register the Meta developer app + start App Review submission (devops).
+- Register the LinkedIn developer app + apply for Marketing API access.
+- Ship the `social_accounts` table + the OAuth-initiate + callback
+  endpoints behind a feature flag — wire the FE Connect buttons that
+  are currently disabled with `pending_approval` chips. Day Meta
+  approves, flip the flag.
+- Per the spec §1, env vars needed in Render (sync:false): `META_APP_ID`,
+  `META_APP_SECRET`, `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`,
+  `CONDDO_SOCIAL_TOKEN_KEY` (32-byte envelope key for token encryption).
+
+Phase 2 onward: scheduling cron + posting via provider APIs + media
+library + creative_service_requests + brand_package subscriptions
+(all detailed in the spec).
+
 ### 7. Billing (PRD §14)
 **Spec**: [BILLING_TIERS_SPEC.md](./BILLING_TIERS_SPEC.md) — Launcher / Growth
 / Scaler tier definitions, schema (subscription_plans, tenant_subscriptions,
