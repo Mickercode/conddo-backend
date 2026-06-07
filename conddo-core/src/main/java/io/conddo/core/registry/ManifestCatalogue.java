@@ -35,6 +35,7 @@ public class ManifestCatalogue {
         section("customers", "Customers", "users", "/customers", 30, "crm", "crm.pharmacy");
         section("tracking", "Tracking", "truck", "/tracking", 42, "tracking.advanced");
         section("prescriptions", "Prescriptions", "pill", "/prescriptions", 45, "prescriptions");
+        section("consultations", "Consultations", "message-circle", "/consultations", 46, "consultations");
         section("orders", "Orders", "clipboard-list", "/orders", 40,
                 "orders", "orders.fashion", "orders.logistics");
         // Fashion deep-dive: Fabric is the specialized inventory view (rolls of

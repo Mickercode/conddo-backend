@@ -32,7 +32,7 @@ public class VerticalToolMatrix {
         this.matrix = Map.ofEntries(
                 Map.entry("pharmacy", tiers(
                         List.of("website", "crm.pharmacy", "inventory.pharmacy", "pos.pharmacy",
-                                "prescriptions", "payments", "analytics"),
+                                "prescriptions", "consultations", "payments", "analytics"),
                         List.of("staff", "marketing.social", "marketing.email", "marketing.sms"),
                         List.of("marketing.ads", "analytics.pharmacy"))),
                 // Fashion — orders is the headline (made-to-measure jobs), but the
