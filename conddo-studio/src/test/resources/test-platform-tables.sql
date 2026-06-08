@@ -32,6 +32,30 @@ CREATE TABLE IF NOT EXISTS public.users (
     google_sub     TEXT
 );
 
+-- Site Registration admin (SITE_REGISTRATION_ADMIN_SPEC) — Studio reads + writes
+-- this table via PlatformTenantSite. Real platform deploys (conddo-api V25)
+-- own the production schema; this seed is just enough for Hibernate's
+-- ddl-auto:validate at Studio test boot.
+CREATE TABLE IF NOT EXISTS public.tenant_sites (
+    id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         UUID         NOT NULL REFERENCES public.tenants (id),
+    subdomain         VARCHAR(100) UNIQUE,
+    custom_domain     VARCHAR(255) UNIQUE,
+    hosting_provider  VARCHAR(50),
+    site_type         VARCHAR(50),
+    api_key_hash      VARCHAR(255) NOT NULL,
+    api_key_last4     VARCHAR(4)   NOT NULL,
+    is_active         BOOLEAN      NOT NULL DEFAULT false,
+    qa_approved       BOOLEAN      NOT NULL DEFAULT false,
+    qa_approved_by    UUID,
+    qa_approved_at    TIMESTAMPTZ,
+    submitted_url     VARCHAR(500),
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_sites_tenant
+    ON public.tenant_sites (tenant_id);
+
 -- Phase 13b's mutators revoke refresh tokens for suspended tenants and
 -- deactivated users. The Studio service writes UPDATEs against this table.
 CREATE TABLE IF NOT EXISTS public.refresh_tokens (

@@ -51,7 +51,7 @@ public class StudioExceptionHandler {
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiResponse<Void>> handleConflict(ConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ApiResponse.fail(ApiError.of("CONFLICT", ex.getMessage())));
+                .body(ApiResponse.fail(ApiError.of(ex.getCode(), ex.getMessage())));
     }
 
     /** §23.5 — refuse to leave a tenant without any active TENANT_ADMIN. */
