@@ -64,6 +64,19 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(ApiError.of("VALIDATION_ERROR", "Invalid value for '" + ex.getName() + "'")));
     }
 
+    /**
+     * Empty/malformed request body — {@code @RequestBody} can't deserialize
+     * it. Without this handler Spring falls through to 500; the FE wires
+     * (Seb&Bayor's login form, etc.) need a structured 400 to surface the
+     * "fill in these fields" message.
+     */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(
+            org.springframework.http.converter.HttpMessageNotReadableException ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.fail(
+                ApiError.of("BAD_REQUEST", "Request body is missing or malformed")));
+    }
+
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleNotFound(NotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)

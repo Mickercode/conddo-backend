@@ -105,6 +105,52 @@ class BrandPackagesFlowTest {
                 .andExpect(jsonPath("$.data[0].includes.design_static").value(4));
     }
 
+    /**
+     * Bug 1 fix from HANDOFF_2026-06-08.md — {@code GET /usage} must
+     * respond cleanly for a tenant without a subscription. The previous
+     * 500 spammed BE logs every time the FE Brand Packages page loaded
+     * for an unsubscribed tenant.
+     */
+    @Test
+    void usageReturns200WithNullDataForUnsubscribedTenant() throws Exception {
+        signup("ph-bp-no-sub", "owner@ph-bp-no-sub.test");
+        String token = login("ph-bp-no-sub", "owner@ph-bp-no-sub.test");
+        // Stay launcher AND unsubscribed.
+
+        mockMvc.perform(get("/api/v1/brand-packages/usage")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    /**
+     * For an active subscriber, {@code /usage} returns the current
+     * period's counts (empty until the first creative request lands)
+     * plus the period bounds so the FE can render quota bars.
+     */
+    @Test
+    void usageReturnsEmptyCountsForActiveSubscriberWithNoRequestsYet() throws Exception {
+        when(paymentsGateway.initBrandPackageCharge(any(), any(), any(), any(), any(), any(),
+                anyLong(), anyString(), anyString()))
+                .thenReturn(Optional.of(new PaymentsGateway.PaymentInitResult(
+                        "RP-bp-usage", "https://x", "PENDING")));
+
+        String tenantId = signup("ph-bp-usage", "owner@ph-bp-usage.test");
+        String token = login("ph-bp-usage", "owner@ph-bp-usage.test");
+        upgradeToGrowth(tenantId);
+        String subId = subscribeAndReturnId(token, "starter_brand");
+        markSubscriptionActive(subId);
+
+        mockMvc.perform(get("/api/v1/brand-packages/usage")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.counts").exists())
+                .andExpect(jsonPath("$.data.periodStart").isNotEmpty())
+                .andExpect(jsonPath("$.data.periodEnd").isNotEmpty());
+    }
+
     @Test
     void launcherTenantHitsPlanGateOnSubscribe() throws Exception {
         signup("ph-bp-gate", "owner@ph-bp-gate.test");

@@ -103,6 +103,28 @@ public class BrandPackageService {
                 .map(s -> new CurrentView(s, offeringRepository.findById(s.getOfferingId()).orElse(null)));
     }
 
+    /**
+     * Current-period usage snapshot for the calling tenant. Returns empty
+     * when the tenant has no subscription (FE renders zero bars) or when a
+     * brand-new subscription hasn't consumed quota yet (FE renders zero
+     * bars against the offering's {@code includes} ceilings).
+     */
+    @Transactional(readOnly = true)
+    public Optional<UsageSnapshot> currentUsage() {
+        tenantSession.bind();
+        return subscriptionRepository.findCurrent()
+                .map(sub -> usageRepository.findFirstBySubscriptionIdOrderByPeriodStartDesc(sub.getId())
+                        .map(u -> new UsageSnapshot(u.getCounts(), u.getPeriodStart(), u.getPeriodEnd()))
+                        .orElseGet(() -> new UsageSnapshot(java.util.Map.of(),
+                                sub.getCurrentPeriodStart(), sub.getCurrentPeriodEnd())));
+    }
+
+    /** Current-period usage view returned by {@link #currentUsage}. */
+    public record UsageSnapshot(java.util.Map<String, Integer> counts,
+                                OffsetDateTime periodStart,
+                                OffsetDateTime periodEnd) {
+    }
+
     // ----- subscribe ---------------------------------------------------------
 
     @Transactional

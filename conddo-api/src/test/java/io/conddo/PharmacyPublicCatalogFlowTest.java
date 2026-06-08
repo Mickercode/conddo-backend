@@ -164,6 +164,34 @@ class PharmacyPublicCatalogFlowTest {
         assertTrue(!registerToken.isBlank());
     }
 
+    /**
+     * Bug 2 fix from HANDOFF_2026-06-08.md — login with no body must
+     * be a structured 400, not a 500. The 500 broke Seb&Bayor's first
+     * login-form smoke test on the public-site spec §2.6.
+     */
+    @Test
+    void loginWithMissingBodyReturns400BadRequest() throws Exception {
+        String tenantId = signup("ph-auth-bad", "owner@ph-auth-bad.test");
+        String tenantToken = login("ph-auth-bad", "owner@ph-auth-bad.test");
+        String key = regenerateKey(tenantToken);
+        activateSite(tenantId, "ph-auth-bad");
+
+        // No content at all — would have crashed with 500 previously.
+        mockMvc.perform(post("/api/v1/public/ph-auth-bad/auth/login")
+                        .header("X-Conddo-Site-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("BAD_REQUEST"));
+
+        // Empty JSON object — should also be 400 via @Valid (missing fields).
+        mockMvc.perform(post("/api/v1/public/ph-auth-bad/auth/login")
+                        .header("X-Conddo-Site-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+    }
+
     // ----- catalog ----------------------------------------------------------
 
     @Test

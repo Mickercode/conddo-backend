@@ -7,6 +7,7 @@ import io.conddo.core.domain.BrandPackageSubscription;
 import io.conddo.core.service.BrandPackageService;
 import io.conddo.core.service.BrandPackageService.CurrentView;
 import io.conddo.core.service.BrandPackageService.SubscribeResult;
+import io.conddo.core.service.BrandPackageService.UsageSnapshot;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
@@ -58,6 +59,19 @@ public class BrandPackagesController {
                 .orElse(new CurrentResponse(null, null)));
     }
 
+    /**
+     * Current-period usage counts for the brand-package subscription.
+     * Returns {@code data: null} for unsubscribed tenants — the FE
+     * renders zero bars when this is null. Earlier (pre-fix) this route
+     * crashed with 500 because no handler existed at all.
+     */
+    @GetMapping("/usage")
+    public ApiResponse<UsageResponse> usage() {
+        return ApiResponse.ok(service.currentUsage()
+                .map(BrandPackagesController::toUsageResponse)
+                .orElse(null));
+    }
+
     @PostMapping("/subscription")
     @PreAuthorize("hasAnyRole('TENANT_ADMIN','SUPER_ADMIN')")
     @RequiresFeature("brand_package_subscription")
@@ -91,6 +105,11 @@ public class BrandPackagesController {
     public record CurrentResponse(SubscriptionResponse subscription, OfferingResponse offering) {
     }
 
+    public record UsageResponse(Map<String, Integer> counts,
+                                OffsetDateTime periodStart,
+                                OffsetDateTime periodEnd) {
+    }
+
     public record OfferingResponse(String code, String name, String description,
                                    int monthlyPriceKobo, Map<String, Integer> includes) {
     }
@@ -119,5 +138,9 @@ public class BrandPackagesController {
         return new CurrentResponse(
                 toSubscriptionResponse(view.subscription()),
                 toOfferingResponse(view.offering()));
+    }
+
+    private static UsageResponse toUsageResponse(UsageSnapshot snap) {
+        return new UsageResponse(snap.counts(), snap.periodStart(), snap.periodEnd());
     }
 }
