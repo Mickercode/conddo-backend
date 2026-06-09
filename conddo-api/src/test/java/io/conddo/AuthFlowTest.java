@@ -1400,6 +1400,58 @@ class AuthFlowTest {
         assertTrue(modules.contains("\"orders.fashion\""), "fashion starter has orders.fashion: " + modules);
     }
 
+    /**
+     * HANDOFF_2026-06-09 §6 — even a tenant signed up without a
+     * {@code verticalId} (the FE's demo {@code pharmacy-test} scenario)
+     * must still get a non-empty {@code activeModules} array and a
+     * {@code plan} claim so {@code useManifests} calls the registry.
+     * Without these, the FE bails to its hardcoded nav and the
+     * Sessions/Fittings/Prescriptions deep-dive entries never appear.
+     */
+    @Test
+    void accessTokenCarriesActiveModulesAndPlanEvenWhenTenantHasNoVertical() throws Exception {
+        // signupReturningId doesn't pass verticalId — the tenant has null vertical_id.
+        signupReturningId("claims-none", "owner@claims-none.test");
+        String token = login("claims-none", "owner@claims-none.test", PASSWORD);
+
+        JsonNode claims = decodeJwtClaims(token);
+        // `plan` always present — normalisePlan(null) defaults to starter.
+        assertEquals("starter", claims.path("plan").asText());
+        // `activeModules` always non-empty — DEFAULT_VERTICAL starter tier kicks in.
+        String modules = claims.path("activeModules").toString();
+        assertTrue(modules.contains("\"website\""), "activeModules has website (default vertical): " + modules);
+        assertTrue(modules.contains("\"crm\""), "activeModules has crm (default vertical): " + modules);
+        assertTrue(modules.contains("\"orders\""), "activeModules has orders (default vertical): " + modules);
+    }
+
+    /**
+     * HANDOFF_2026-06-09 §6 — {@code /auth/refresh} must mint the same
+     * shape of access token as {@code /auth/login}, otherwise a tab
+     * that's been open long enough to refresh would silently drop its
+     * manifest-nav and fall back to the static APP_NAV.
+     */
+    @Test
+    void refreshedAccessTokenCarriesAllThreeClaims() throws Exception {
+        signupVerticalAndLogin("claims-refresh", "owner@claims-refresh.test", "music-studio");
+        MvcResult login = performLogin("claims-refresh", "owner@claims-refresh.test", PASSWORD);
+        String cookie = refreshCookieValue(login);
+
+        MvcResult refreshed = mockMvc.perform(post("/auth/refresh")
+                        .cookie(new jakarta.servlet.http.Cookie(RefreshCookies.COOKIE_NAME, cookie)))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = objectMapper.readTree(refreshed.getResponse().getContentAsString())
+                .path("data").path("accessToken").asText();
+
+        JsonNode claims = decodeJwtClaims(token);
+        assertEquals("music-studio", claims.path("vertical").asText());
+        assertEquals("starter", claims.path("plan").asText());
+        String modules = claims.path("activeModules").toString();
+        assertTrue(modules.contains("\"bookings\""), "refresh keeps music-studio bookings: " + modules);
+        assertTrue(modules.contains("\"sessions.music-studio\""),
+                "refresh keeps the Sessions deep-dive that lights the sidebar: " + modules);
+    }
+
     @Test
     void registryManifestsBuildNavFromActiveModules() throws Exception {
         String token = signupVerticalAndLogin("reg-a", "owner@reg.test", "fashion");
