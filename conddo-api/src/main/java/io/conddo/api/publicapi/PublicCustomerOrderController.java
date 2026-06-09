@@ -56,7 +56,8 @@ public class PublicCustomerOrderController {
                 .map(i -> new RequestedItem(i.productId(), i.quantity()))
                 .toList();
         CheckoutResult result = checkoutService.checkout(customerId, items,
-                body.addressId(), body.prescriptionId(), body.notes());
+                body.addressId(), body.prescriptionId(), body.notes(),
+                body.refillOfferCode());
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
                 "success", true,
                 "order", toCreatedShape(result)));
@@ -83,7 +84,8 @@ public class PublicCustomerOrderController {
             @NotEmpty List<Item> items,
             @NotNull UUID addressId,
             String notes,
-            UUID prescriptionId) {
+            UUID prescriptionId,
+            String refillOfferCode) {
 
         public record Item(@NotNull UUID productId, @Positive int quantity) {
         }

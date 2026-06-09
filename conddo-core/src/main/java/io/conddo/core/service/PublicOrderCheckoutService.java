@@ -56,6 +56,7 @@ public class PublicOrderCheckoutService {
     private final BillingService billingService;
     private final StockMovementService stockMovementService;
     private final PharmacyDiscountService discountService;
+    private final PharmacyRefillOfferService refillOfferService;
     private final ApplicationEventPublisher events;
     private final TenantSession tenantSession;
 
@@ -73,6 +74,7 @@ public class PublicOrderCheckoutService {
                                       BillingService billingService,
                                       StockMovementService stockMovementService,
                                       PharmacyDiscountService discountService,
+                                      PharmacyRefillOfferService refillOfferService,
                                       ApplicationEventPublisher events,
                                       TenantSession tenantSession) {
         this.productRepository = productRepository;
@@ -86,6 +88,7 @@ public class PublicOrderCheckoutService {
         this.billingService = billingService;
         this.stockMovementService = stockMovementService;
         this.discountService = discountService;
+        this.refillOfferService = refillOfferService;
         this.events = events;
         this.tenantSession = tenantSession;
     }
@@ -93,6 +96,22 @@ public class PublicOrderCheckoutService {
     @Transactional
     public CheckoutResult checkout(UUID customerId, List<RequestedItem> requested,
                                    UUID addressId, UUID prescriptionId, String notes) {
+        return checkout(customerId, requested, addressId, prescriptionId, notes, null);
+    }
+
+    /**
+     * Same as {@link #checkout(UUID, List, UUID, UUID, String)} but with
+     * an optional refill-offer code (Pharmacy Spec v2 §12E). When the
+     * code resolves to a live claim issued to {@code customerId} for
+     * one of the line items, that line gets the offer's discount
+     * (which beats any regular {@link io.conddo.core.domain.PharmacyDiscount}
+     * on the same product) and the claim is redeemed against the
+     * resulting order.
+     */
+    @Transactional
+    public CheckoutResult checkout(UUID customerId, List<RequestedItem> requested,
+                                   UUID addressId, UUID prescriptionId, String notes,
+                                   String refillOfferCode) {
         if (requested == null || requested.isEmpty()) {
             throw new IllegalArgumentException("items is required");
         }
@@ -146,14 +165,23 @@ public class PublicOrderCheckoutService {
             }
             locked.add(p);
             BigDecimal listPrice = p.getPrice() == null ? BigDecimal.ZERO : p.getPrice();
-            // Spec v2 §5 — apply active discounts at order time. The
-            // discounted price becomes the unit price; the discount details
-            // are snapshotted into OrderItem so the customer-paid price is
-            // preserved after the discount expires.
-            io.conddo.core.domain.PharmacyDiscount activeDiscount =
-                    discountService.activeForProduct(p.getId()).orElse(null);
-            BigDecimal effectivePrice = activeDiscount == null
-                    ? listPrice : activeDiscount.applyTo(listPrice);
+            // Spec v2 §5 + §12E — apply active discounts at order time. A
+            // valid refill offer for this exact product beats the regular
+            // approved discount (customer chose to spend the code); either
+            // way the resulting price is what hits OrderItem.unitPrice so
+            // the customer-paid amount is preserved after the discount
+            // expires.
+            BigDecimal effectivePrice = listPrice;
+            if (refillOfferCode != null
+                    && refillOfferAppliesTo(refillOfferCode, customerId, p.getId())) {
+                effectivePrice = refillDiscountedPrice(refillOfferCode, listPrice);
+            } else {
+                io.conddo.core.domain.PharmacyDiscount activeDiscount =
+                        discountService.activeForProduct(p.getId()).orElse(null);
+                if (activeDiscount != null) {
+                    effectivePrice = activeDiscount.applyTo(listPrice);
+                }
+            }
             subtotal = subtotal.add(effectivePrice.multiply(BigDecimal.valueOf(item.quantity())));
             orderItems.add(new OrderService.NewItem(
                     p.getNameGeneric() == null ? p.getName() : p.getNameGeneric(),
@@ -205,6 +233,22 @@ public class PublicOrderCheckoutService {
         }
 
         cartService.clear(customerId);
+
+        // §12E — redeem the refill-offer claim against the order now that
+        // it has an id. We only call this when the code was provided AND
+        // it applied to at least one line; the redeem also re-validates
+        // (customer match, not expired, not already used).
+        if (refillOfferCode != null) {
+            try {
+                refillOfferService.redeem(refillOfferCode, customerId, order.getId());
+            } catch (RuntimeException ex) {
+                // Don't fail the order over a stale claim — the customer
+                // already paid the discounted price; this is just metadata
+                // bookkeeping. Log so prod can spot pattern issues.
+                log.warn("Refill offer redeem failed for order {} (code={}): {}",
+                        order.getId(), refillOfferCode, ex.getMessage());
+            }
+        }
 
         events.publishEvent(new OrderCreatedEvent(
                 TenantContext.require(), order.getId(), order.getReference(),
@@ -305,4 +349,29 @@ public class PublicOrderCheckoutService {
             super(msg);
         }
     }
+
+    private boolean refillOfferAppliesTo(String code, UUID customerId, UUID productId) {
+        try {
+            io.conddo.core.service.PharmacyRefillOfferService.ValidationResult v =
+                    refillOfferService.validate(code);
+            if (!v.valid()) {
+                return false;
+            }
+            if (!customerId.equals(v.claim().getCustomerId())) {
+                return false;
+            }
+            return productId.equals(v.offer().getProductId());
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private BigDecimal refillDiscountedPrice(String code, BigDecimal listPrice) {
+        io.conddo.core.service.PharmacyRefillOfferService.ValidationResult v =
+                refillOfferService.validate(code);
+        return v.offer().applyTo(listPrice);
+    }
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(PublicOrderCheckoutService.class);
 }
