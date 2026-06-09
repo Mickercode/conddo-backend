@@ -382,9 +382,27 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(ApiError.of("MODULE_NOT_ENABLED", ex.getMessage())));
     }
 
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleGeneric(Exception ex) {
+    /**
+     * Catch-all for anything not handled above. We log the full stack
+     * trace so Render logs surface the actual root cause (e.g. a
+     * missing Flyway migration, a JPA query mismatch, a NPE), and we
+     * include a sanitized exception class name in the response body so
+     * the FE can show a useful toast and the cause can be eyeballed
+     * without server log access (HANDOFF_2026-06-09b §4).
+     *
+     * <p>The class name is just the simple name (e.g.
+     * {@code DataIntegrityViolationException}) — no stack frames,
+     * no source paths. Enough to triage; not enough to leak internals.
+     */
+    @ExceptionHandler(Throwable.class)
+    public ResponseEntity<ApiResponse<Void>> handleGeneric(Throwable ex) {
+        LOG.error("Unhandled exception bubbled to the global handler", ex);
+        String cause = ex.getClass().getSimpleName();
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.fail(ApiError.of("INTERNAL_ERROR", "An unexpected error occurred")));
+                .body(ApiResponse.fail(ApiError.of("INTERNAL_ERROR",
+                        "An unexpected error occurred (" + cause + ")")));
     }
+
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(GlobalExceptionHandler.class);
 }
