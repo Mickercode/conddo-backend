@@ -174,11 +174,12 @@ public class PharmacyDiscountService {
 
     /**
      * Flip every APPROVED row whose {@code ends_at} has passed to
-     * {@code EXPIRED}. Idempotent; safe to run from a scheduled job.
+     * {@code EXPIRED}. Idempotent; safe to run from a scheduled job
+     * with no bound tenant — uses the V38 cross_tenant carve-out.
      */
     @Transactional
     public int sweepExpired() {
-        tenantSession.bind();
+        tenantSession.bindCrossTenant();
         OffsetDateTime now = OffsetDateTime.now(clock);
         List<PharmacyDiscount> due = repository.findExpiredButNotYetSwept(now);
         for (PharmacyDiscount d : due) {

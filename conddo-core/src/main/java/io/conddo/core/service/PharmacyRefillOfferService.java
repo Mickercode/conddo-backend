@@ -44,6 +44,7 @@ public class PharmacyRefillOfferService {
     private final PharmacyRefillOfferRepository offerRepository;
     private final PharmacyRefillOfferClaimRepository claimRepository;
     private final ProductRepository productRepository;
+    private final PharmacyReminderService reminderService;
     private final TenantSession tenantSession;
     private final Clock clock;
     private final SecureRandom rng = new SecureRandom();
@@ -51,11 +52,13 @@ public class PharmacyRefillOfferService {
     public PharmacyRefillOfferService(PharmacyRefillOfferRepository offerRepository,
                                       PharmacyRefillOfferClaimRepository claimRepository,
                                       ProductRepository productRepository,
+                                      PharmacyReminderService reminderService,
                                       TenantSession tenantSession,
                                       Clock clock) {
         this.offerRepository = offerRepository;
         this.claimRepository = claimRepository;
         this.productRepository = productRepository;
+        this.reminderService = reminderService;
         this.tenantSession = tenantSession;
         this.clock = clock;
     }
@@ -110,9 +113,19 @@ public class PharmacyRefillOfferService {
         String code = generateUniqueCode();
         PharmacyRefillOfferClaim claim = claimRepository.save(new PharmacyRefillOfferClaim(
                 TenantContext.require(), offerId, customerId, code, issuedAt, expiresAt));
-        // The SMS dispatch lives in the Reminder slice (§12D) — for now
-        // we just record whether the pharmacist requested it so the
-        // reminder service can pick it up once Brevo is wired.
+        // §12D — when the pharmacist asks for the SMS to be dispatched,
+        // pre-interpolate the offer-specific tokens ({offerCode}/
+        // {validDays}) and queue a one-shot SCHEDULED reminder. The
+        // hourly reminder scheduler picks it up, interpolates the
+        // remaining customer/product/store tokens, and dispatches via
+        // Brevo. Pharmacist-skipped or message-less offers are no-ops.
+        if (sendSms && offer.getMessage() != null && !offer.getMessage().isBlank()) {
+            String prefilled = offer.getMessage()
+                    .replace("{offerCode}", code)
+                    .replace("{validDays}", String.valueOf(offer.getValidDays()));
+            reminderService.create(customerId, offer.getProductId(),
+                    "REFILL_OFFER", prefilled, issuedAt, null, null, offer.getCreatedBy());
+        }
         return new IssuedClaim(claim, offer, sendSms);
     }
 
