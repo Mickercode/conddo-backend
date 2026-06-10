@@ -383,6 +383,33 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * AI Product Assistant (Spec v2 §12C) — gateway is dormant on
+     * this deployment because no API key is set. 503 with a clean
+     * envelope so the FE can render "AI Assistant is offline" instead
+     * of a generic 500.
+     */
+    @ExceptionHandler(io.conddo.core.ai.AnthropicGateway.AnthropicNotConfiguredException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAiNotConfigured(
+            io.conddo.core.ai.AnthropicGateway.AnthropicNotConfiguredException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResponse.fail(ApiError.of("AI_NOT_CONFIGURED", ex.getMessage())));
+    }
+
+    /**
+     * AI Product Assistant — the call to Anthropic failed (timeout,
+     * 5xx, non-JSON output). 502 with the gateway's sanitized
+     * message; the underlying stack is logged via the catch-all
+     * below.
+     */
+    @ExceptionHandler(io.conddo.core.ai.AnthropicGateway.AnthropicUnavailableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAiUnavailable(
+            io.conddo.core.ai.AnthropicGateway.AnthropicUnavailableException ex) {
+        LOG.warn("AI gateway call failed: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiResponse.fail(ApiError.of("AI_UNAVAILABLE", ex.getMessage())));
+    }
+
+    /**
      * Catch-all for anything not handled above. We log the full stack
      * trace so Render logs surface the actual root cause (e.g. a
      * missing Flyway migration, a JPA query mismatch, a NPE), and we
