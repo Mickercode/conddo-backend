@@ -844,6 +844,67 @@ class AuthFlowTest {
                 .andExpect(status().isNotFound());
     }
 
+    /**
+     * Booking-source notify parity with the order flow (Pharmacy v2
+     * follow-up). A self-booking on the public link fires the same
+     * three-channel fan-out the order-side already had — bell feed,
+     * owner email, owner SMS.
+     */
+    @Test
+    void publicSelfBookFiresOwnerNotifyOnAllThreeChannels() throws Exception {
+        String token = signupVerticalAndLogin("book-notify", "owner@book-notify.test", "general");
+        // Seed the tenant's contact phone — owner user record doesn't
+        // carry one in the test signup, but the listener falls back to
+        // the business contact (matches OrderNotificationListener).
+        try (java.sql.Connection owner = java.sql.DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             java.sql.PreparedStatement ps = owner.prepareStatement(
+                     "UPDATE tenants SET contact_phone = ? WHERE slug = ?")) {
+            ps.setString(1, "+2348091234999");
+            ps.setString(2, "book-notify");
+            ps.executeUpdate();
+        }
+
+        java.time.LocalDate monday = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
+                .with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+        java.time.OffsetDateTime start = monday.plusDays(2).atTime(11, 0).atOffset(java.time.ZoneOffset.UTC);
+        mockMvc.perform(post("/api/v1/public/book/book-notify").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "customerName", "Notify Customer",
+                                "customerPhone", "+2348000111222",
+                                "service", "Consultation",
+                                "start", start.toString()))))
+                .andExpect(status().isCreated());
+
+        // Email goes to the owner.
+        verify(emailSender, org.mockito.Mockito.timeout(5_000)).send(
+                eq("owner@book-notify.test"),
+                org.mockito.ArgumentMatchers.contains("booking"),
+                org.mockito.ArgumentMatchers.contains("Notify Customer"));
+        // SMS falls back to the tenant's contact_phone (the owner User
+        // record has no phone on file at signup).
+        verify(smsSender, org.mockito.Mockito.timeout(5_000)).send(
+                eq("+2348091234999"),
+                org.mockito.ArgumentMatchers.contains("Notify Customer"));
+
+        // Bell feed gets a BOOKING row.
+        MvcResult feed = mockMvc.perform(get("/api/v1/notifications")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(token)))
+                .andExpect(status().isOk())
+                .andReturn();
+        com.fasterxml.jackson.databind.JsonNode items = objectMapper.readTree(
+                feed.getResponse().getContentAsString()).path("data").path("items");
+        boolean foundBookingRow = false;
+        for (com.fasterxml.jackson.databind.JsonNode item : items) {
+            if ("BOOKING".equals(item.path("type").asText())
+                    && item.path("body").asText().contains("Notify Customer")) {
+                foundBookingRow = true;
+                break;
+            }
+        }
+        assertTrue(foundBookingRow, "expected a BOOKING bell-feed row for the self-book");
+    }
+
     @Test
     void inventoryProductsCategoriesStockAndLowStockKpi() throws Exception {
         String token = signupVerticalAndLogin("inv-a", "owner@inv.test", "general");

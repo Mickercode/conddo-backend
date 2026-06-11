@@ -3,10 +3,12 @@ package io.conddo.core.service;
 import io.conddo.core.common.NotFoundException;
 import io.conddo.core.domain.Booking;
 import io.conddo.core.domain.Tenant;
+import io.conddo.core.events.BookingCreatedEvent;
 import io.conddo.core.repository.BookingRepository;
 import io.conddo.core.repository.TenantRepository;
 import io.conddo.core.tenant.TenantContext;
 import io.conddo.core.tenant.TenantSession;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,16 +32,16 @@ public class PublicBookingService {
 
     private final TenantRepository tenantRepository;
     private final BookingRepository bookingRepository;
-    private final NotificationFeedService notificationFeedService;
+    private final ApplicationEventPublisher events;
     private final TenantSession tenantSession;
     private final Clock clock;
 
     public PublicBookingService(TenantRepository tenantRepository, BookingRepository bookingRepository,
-                                NotificationFeedService notificationFeedService,
+                                ApplicationEventPublisher events,
                                 TenantSession tenantSession, Clock clock) {
         this.tenantRepository = tenantRepository;
         this.bookingRepository = bookingRepository;
-        this.notificationFeedService = notificationFeedService;
+        this.events = events;
         this.tenantSession = tenantSession;
         this.clock = clock;
     }
@@ -72,9 +74,11 @@ public class PublicBookingService {
                 ? "Self-booked via link" : "Self-booked via link. Contact: " + phone);
         booking = bookingRepository.save(booking);
 
-        // Notify the owner of the incoming request (§11.12 bell feed).
-        notificationFeedService.create("BOOKING", "New booking request",
-                customerName + (service == null ? "" : " — " + service), null);
+        // Fan-out to bell-feed + email + SMS via the BookingNotificationListener
+        // (Pharmacy v2 follow-up — booking parity with the order notify flow).
+        events.publishEvent(new BookingCreatedEvent(
+                tenant.getId(), booking.getId(), customerName, service, start, phone,
+                BookingCreatedEvent.Source.PUBLIC_WEBSITE));
         return booking;
     }
 

@@ -86,6 +86,39 @@ public class NotificationService {
         }
     }
 
+    /**
+     * Booking parity to {@link #sendOrderAlert} — fired by the
+     * BookingNotificationListener when a customer self-books on the
+     * merchant's public booking link. Both channels best-effort.
+     */
+    public void sendBookingAlert(String toEmail, String toPhone, String businessName,
+                                 String customerName, String service, String when,
+                                 String contactPhone) {
+        String subject = "New booking request on your conddo.io site";
+        String text = "Hi " + nullSafe(businessName) + ",\n\n"
+                + nullSafe(customerName) + " just requested a booking"
+                + (service == null || service.isBlank() ? "" : " for " + service)
+                + (when == null || when.isBlank() ? "" : " at " + when)
+                + (contactPhone == null || contactPhone.isBlank() ? "" : " (contact: " + contactPhone + ")")
+                + ".\n\nReview it on your dashboard: " + appBaseUrl + "/bookings\n\n"
+                + "— Conddo";
+        if (toEmail != null && !toEmail.isBlank()) {
+            try {
+                emailSender.send(toEmail, subject, text);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (toPhone != null && !toPhone.isBlank()) {
+            String sms = "New booking on conddo.io — " + nullSafe(customerName)
+                    + (service == null || service.isBlank() ? "" : " — " + service)
+                    + (when == null || when.isBlank() ? "" : " — " + when);
+            try {
+                smsSender.send(toPhone, sms);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
     private static String nullSafe(String s) {
         return s == null ? "" : s;
     }
