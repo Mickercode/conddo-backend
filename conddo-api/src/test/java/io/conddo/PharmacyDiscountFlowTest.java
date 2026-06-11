@@ -30,6 +30,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.fasterxml.jackson.databind.JsonNode;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -201,6 +203,46 @@ class PharmacyDiscountFlowTest {
                 .andExpect(jsonPath("$.order.total").value(1980.00))
                 .andReturn();
         assertTrue(result.getResponse().getContentAsString().contains("\"success\":true"));
+    }
+
+    /**
+     * Spec v2 §12B implementation note: "Conddo notifies the Tenant
+     * Admin via dashboard notification that a discount is awaiting
+     * approval." Listener runs @Async AFTER_COMMIT — poll the bell
+     * feed briefly until the row lands.
+     */
+    @Test
+    void creatingDiscountFiresBellFeedNudgeToTenantAdmin() throws Exception {
+        String tenantId = signup("disc-bell", "owner@disc-bell.test");
+        String adminToken = login("disc-bell", "owner@disc-bell.test");
+        String pid = seedProduct(tenantId, "Aspirin", "200.00", "aspirin-bell");
+
+        createDiscount(adminToken, pid, "PERCENTAGE", 15, "Quick promo");
+
+        long deadline = System.currentTimeMillis() + 5_000;
+        boolean found = false;
+        while (System.currentTimeMillis() < deadline && !found) {
+            MvcResult feed = mockMvc.perform(get("/api/v1/notifications")
+                            .header(HttpHeaders.AUTHORIZATION, bearer(adminToken)))
+                    .andExpect(status().isOk())
+                    .andReturn();
+            JsonNode items = objectMapper.readTree(feed.getResponse().getContentAsString())
+                    .path("data").path("items");
+            for (JsonNode item : items) {
+                if ("DISCOUNT_PENDING".equals(item.path("type").asText())) {
+                    assertTrue(item.path("title").asText().contains("pending approval"),
+                            "title should mention approval: " + item);
+                    assertTrue(item.path("body").asText().contains("Aspirin"),
+                            "body should name the product: " + item);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                Thread.sleep(50);
+            }
+        }
+        assertTrue(found, "DISCOUNT_PENDING bell-feed row never landed within 5s");
     }
 
     @Test

@@ -3,11 +3,13 @@ package io.conddo.core.service;
 import io.conddo.core.common.NotFoundException;
 import io.conddo.core.domain.PharmacyDiscount;
 import io.conddo.core.domain.Product;
+import io.conddo.core.events.DiscountPendingApprovalEvent;
 import io.conddo.core.repository.PharmacyDiscountRepository;
 import io.conddo.core.repository.ProductRepository;
 import io.conddo.core.tenant.TenantContext;
 import io.conddo.core.tenant.TenantSession;
 import jakarta.persistence.criteria.Predicate;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -35,15 +37,18 @@ public class PharmacyDiscountService {
 
     private final PharmacyDiscountRepository repository;
     private final ProductRepository productRepository;
+    private final ApplicationEventPublisher events;
     private final TenantSession tenantSession;
     private final Clock clock;
 
     public PharmacyDiscountService(PharmacyDiscountRepository repository,
                                    ProductRepository productRepository,
+                                   ApplicationEventPublisher events,
                                    TenantSession tenantSession,
                                    Clock clock) {
         this.repository = repository;
         this.productRepository = productRepository;
+        this.events = events;
         this.tenantSession = tenantSession;
         this.clock = clock;
     }
@@ -73,8 +78,14 @@ public class PharmacyDiscountService {
         if (endsAt != null && !endsAt.isAfter(startsAt)) {
             throw new IllegalArgumentException("endsAt must be after startsAt");
         }
-        return repository.save(new PharmacyDiscount(TenantContext.require(), productId,
-                discountType, discountValue, label, startsAt, endsAt, createdBy));
+        PharmacyDiscount saved = repository.save(new PharmacyDiscount(TenantContext.require(),
+                productId, discountType, discountValue, label, startsAt, endsAt, createdBy));
+        // §12B — fan out a bell-feed nudge to the TENANT_ADMIN so they
+        // can approve/reject without polling. Listener runs AFTER_COMMIT.
+        events.publishEvent(new DiscountPendingApprovalEvent(
+                TenantContext.require(), saved.getId(), productId, label,
+                discountType, discountValue.toPlainString(), createdBy));
+        return saved;
     }
 
     @Transactional(readOnly = true)
