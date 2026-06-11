@@ -55,6 +55,7 @@ public final class FeatureCatalogue {
         CATALOGUE.put("followup_workflow", Status.BETA);
         CATALOGUE.put("drug_programs", Status.BETA);
         CATALOGUE.put("emr_basic", Status.BETA);
+        CATALOGUE.put("pos", Status.BETA);
         // Coming Soon — interest-list only; not yet built.
         CATALOGUE.put("multi_store", Status.COMING_SOON);
         CATALOGUE.put("offline_mobile", Status.COMING_SOON);

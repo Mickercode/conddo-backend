@@ -354,6 +354,71 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(ApiError.of("UNAUTHENTICATED", ex.getMessage())));
     }
 
+    // ----- POS Phase 1 ------------------------------------------------------
+
+    @ExceptionHandler(io.conddo.core.service.PosSessionService.SessionAlreadyOpenException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosSessionAlreadyOpen(
+            io.conddo.core.service.PosSessionService.SessionAlreadyOpenException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("SESSION_ALREADY_OPEN", ex.getMessage(),
+                        java.util.List.of(new ApiError.FieldError("sessionId",
+                                String.valueOf(ex.getExistingSessionId()))))));
+    }
+
+    @ExceptionHandler(io.conddo.core.service.PosSessionService.SessionHasOpenSalesException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosSessionHasOpenSales(
+            io.conddo.core.service.PosSessionService.SessionHasOpenSalesException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("SESSION_HAS_OPEN_SALES", ex.getMessage())));
+    }
+
+    @ExceptionHandler(io.conddo.core.service.PosSaleService.NoOpenSessionException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosNoOpenSession(
+            io.conddo.core.service.PosSaleService.NoOpenSessionException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("NO_OPEN_SESSION", ex.getMessage())));
+    }
+
+    @ExceptionHandler(io.conddo.core.service.PosSaleService.SaleNotOpenException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosSaleNotOpen(
+            io.conddo.core.service.PosSaleService.SaleNotOpenException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("SALE_NOT_OPEN", ex.getMessage())));
+    }
+
+    @ExceptionHandler(io.conddo.core.service.PosSaleService.SaleAlreadyCompletedException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosSaleAlreadyCompleted(
+            io.conddo.core.service.PosSaleService.SaleAlreadyCompletedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("SALE_ALREADY_COMPLETED", ex.getMessage())));
+    }
+
+    @ExceptionHandler(io.conddo.core.service.PosSaleService.SaleHasNoItemsException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosSaleHasNoItems(
+            io.conddo.core.service.PosSaleService.SaleHasNoItemsException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(ApiError.of("SALE_HAS_NO_ITEMS", ex.getMessage())));
+    }
+
+    @ExceptionHandler(io.conddo.core.service.PosSaleService.PaymentInsufficientException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosPaymentInsufficient(
+            io.conddo.core.service.PosSaleService.PaymentInsufficientException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(ApiError.of("PAYMENT_INSUFFICIENT", ex.getMessage(),
+                        java.util.List.of(new ApiError.FieldError("balance",
+                                String.valueOf(ex.getOutstanding()))))));
+    }
+
+    @ExceptionHandler(io.conddo.core.service.PosSaleService.InsufficientStockException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePosInsufficientStock(
+            io.conddo.core.service.PosSaleService.InsufficientStockException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(ApiError.of("INSUFFICIENT_STOCK", ex.getMessage(),
+                        java.util.List.of(
+                                new ApiError.FieldError("productId", String.valueOf(ex.getProductId())),
+                                new ApiError.FieldError("available", String.valueOf(ex.getAvailable()))))));
+    }
+
     /** Public cart add: quantity exceeds available stock — 400 INSUFFICIENT_STOCK. */
     @ExceptionHandler(PublicCartService.InsufficientStockException.class)
     public ResponseEntity<ApiResponse<Void>> handleInsufficientStock(PublicCartService.InsufficientStockException ex) {
