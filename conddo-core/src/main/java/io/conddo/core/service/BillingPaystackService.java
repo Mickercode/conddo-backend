@@ -55,6 +55,7 @@ public class BillingPaystackService {
     private final TenantSubscriptionRepository subscriptionRepository;
     private final SubscriptionPlanRepository planRepository;
     private final UserRepository userRepository;
+    private final PharmacyProgramService programService;
     private final TenantSession tenantSession;
     private final Clock clock;
     private final String defaultCallbackUrl;
@@ -66,6 +67,7 @@ public class BillingPaystackService {
                                   TenantSubscriptionRepository subscriptionRepository,
                                   SubscriptionPlanRepository planRepository,
                                   UserRepository userRepository,
+                                  PharmacyProgramService programService,
                                   TenantSession tenantSession,
                                   Clock clock,
                                   @Value("${conddo.paystack.callback-url:https://app.conddo.io/settings/billing/return}")
@@ -76,6 +78,7 @@ public class BillingPaystackService {
         this.subscriptionRepository = subscriptionRepository;
         this.planRepository = planRepository;
         this.userRepository = userRepository;
+        this.programService = programService;
         this.tenantSession = tenantSession;
         this.clock = clock;
         this.defaultCallbackUrl = defaultCallbackUrl;
@@ -198,7 +201,12 @@ public class BillingPaystackService {
                 tx.markSuccess(v.paidAt() == null ? OffsetDateTime.now(clock) : v.paidAt(),
                         v.subscriptionCode());
                 transactionRepository.save(tx);
-                activatePlan(tx);
+                if (BillingPaystackTransaction.PURPOSE_PROGRAM_ENROLLMENT.equals(tx.getPurpose())
+                        && tx.getEnrollmentId() != null) {
+                    programService.activateEnrollment(tx.getEnrollmentId(), v.subscriptionCode());
+                } else {
+                    activatePlan(tx);
+                }
             }
             case FAILED -> {
                 tx.markFailed(v.failureReason());

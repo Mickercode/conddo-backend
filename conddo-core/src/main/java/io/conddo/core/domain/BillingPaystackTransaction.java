@@ -27,6 +27,9 @@ public class BillingPaystackTransaction {
     public static final String STATUS_FAILED = "failed";
     public static final String STATUS_ABANDONED = "abandoned";
 
+    public static final String PURPOSE_PLAN_UPGRADE = "PLAN_UPGRADE";
+    public static final String PURPOSE_PROGRAM_ENROLLMENT = "PROGRAM_ENROLLMENT";
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
@@ -60,6 +63,12 @@ public class BillingPaystackTransaction {
 
     @Column(name = "initiated_by")
     private UUID initiatedBy;
+
+    @Column(nullable = false, length = 30)
+    private String purpose = PURPOSE_PLAN_UPGRADE;
+
+    @Column(name = "enrollment_id")
+    private UUID enrollmentId;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -124,6 +133,22 @@ public class BillingPaystackTransaction {
 
     public UUID getInitiatedBy() {
         return initiatedBy;
+    }
+
+    public String getPurpose() {
+        return purpose;
+    }
+
+    public void setPurpose(String purpose) {
+        this.purpose = purpose;
+    }
+
+    public UUID getEnrollmentId() {
+        return enrollmentId;
+    }
+
+    public void setEnrollmentId(UUID enrollmentId) {
+        this.enrollmentId = enrollmentId;
     }
 
     public OffsetDateTime getCreatedAt() {
