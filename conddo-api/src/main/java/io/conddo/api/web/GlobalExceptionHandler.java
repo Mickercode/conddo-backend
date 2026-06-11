@@ -333,6 +333,20 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(ApiError.of("INVALID_RESET_TOKEN", ex.getMessage())));
     }
 
+    /**
+     * Beta feature gate — the calling tenant doesn't have the flag
+     * enabled. 403 FEATURE_NOT_ENABLED with a {@code featureKey}
+     * field hint (HANDOFF_2026-06-11 §0).
+     */
+    @ExceptionHandler(io.conddo.core.features.FeatureNotEnabledException.class)
+    public ResponseEntity<ApiResponse<Void>> handleFeatureNotEnabled(
+            io.conddo.core.features.FeatureNotEnabledException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.fail(ApiError.of("FEATURE_NOT_ENABLED", ex.getMessage(),
+                        java.util.List.of(new ApiError.FieldError(
+                                "featureKey", ex.getFeatureKey())))));
+    }
+
     /** Missing or bad customer JWT on a public-website endpoint — 401 UNAUTHENTICATED. */
     @ExceptionHandler(PublicCustomerAuth.UnauthenticatedCustomerException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnauthenticatedCustomer(PublicCustomerAuth.UnauthenticatedCustomerException ex) {
