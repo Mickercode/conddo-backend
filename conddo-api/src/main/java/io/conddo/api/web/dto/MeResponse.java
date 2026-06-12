@@ -12,7 +12,8 @@ import java.util.UUID;
  */
 public record MeResponse(UserSummary user, TenantSummary tenant) {
 
-    public record UserSummary(UUID id, String fullName, String email, String role, String initials) {
+    public record UserSummary(UUID id, String fullName, String email, String role,
+                              String staffRole, String initials) {
     }
 
     public record TenantSummary(UUID id, String name, String slug, String subdomain,
@@ -21,7 +22,8 @@ public record MeResponse(UserSummary user, TenantSummary tenant) {
 
     public static MeResponse from(User user, Tenant tenant) {
         UserSummary userSummary = new UserSummary(
-                user.getId(), user.getFullName(), user.getEmail(), user.getRole(), initials(user.getFullName()));
+                user.getId(), user.getFullName(), user.getEmail(), user.getRole(),
+                user.getStaffRole(), initials(user.getFullName()));
         TenantSummary tenantSummary = new TenantSummary(
                 tenant.getId(), tenant.getName(), tenant.getSlug(), tenant.getSlug(),
                 tenant.getCustomDomain(), tenant.getVerticalId(), tenant.getPlanId(), tenant.getStatus());

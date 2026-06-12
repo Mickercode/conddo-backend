@@ -44,6 +44,15 @@ public class User implements LockableAccount {
     @Column(nullable = false)
     private String role = "TENANT_ADMIN";
 
+    /**
+     * Sub-role for STAFF users (Manager / Pharmacist / Cashier /
+     * Stock Manager / Bookkeeper). Null for TENANT_ADMIN and
+     * SUPER_ADMIN. The pair invariant is enforced by a DB CHECK
+     * (V48), so we never have to defend it in app code.
+     */
+    @Column(name = "staff_role", length = 20)
+    private String staffRole;
+
     private String phone;
 
     @Column(name = "is_active", nullable = false)
@@ -129,6 +138,15 @@ public class User implements LockableAccount {
         if (role != null && !role.isBlank()) {
             this.role = role;
         }
+    }
+
+    /** Changes the staff sub-role. Null is valid (clears the sub-role for owners). */
+    public void changeStaffRole(String staffRole) {
+        this.staffRole = staffRole;
+    }
+
+    public String getStaffRole() {
+        return staffRole;
     }
 
     /** Activates or deactivates the account (§11.10). A deactivated user cannot log in. */

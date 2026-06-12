@@ -70,6 +70,7 @@ public class AuthService {
     /** Issues an access token stamped with the tenant's vertical/plan/activeModules (§4.4). */
     private String issueAccessTokenFor(User user, Tenant tenant) {
         return jwtService.issueAccessToken(user.getId(), user.getTenantId(), user.getRole(),
+                user.getStaffRole(),
                 tenant.getVerticalId(), toolMatrix.normalizePlan(tenant.getPlanId()),
                 toolMatrix.resolve(tenant.getVerticalId(), tenant.getPlanId()));
     }

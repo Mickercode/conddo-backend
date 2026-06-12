@@ -189,6 +189,7 @@ public class RegistrationService {
                 tenant.getId(), admin.getId(), null, Map.of("businessName", businessName));
 
         String accessToken = jwtService.issueAccessToken(admin.getId(), admin.getTenantId(), admin.getRole(),
+                admin.getStaffRole(),
                 tenant.getVerticalId(), toolMatrix.normalizePlan(tenant.getPlanId()),
                 toolMatrix.resolve(tenant.getVerticalId(), tenant.getPlanId()));
         String refreshToken = refreshTokenService.issue(admin.getId(), admin.getTenantId());
