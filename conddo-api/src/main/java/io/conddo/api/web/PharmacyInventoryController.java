@@ -52,8 +52,11 @@ import java.util.UUID;
 @RequestMapping("/api/v1/inventory")
 public class PharmacyInventoryController {
 
-    private static final String READ = "hasAnyRole('TENANT_ADMIN','STAFF','SUPER_ADMIN')";
-    private static final String WRITE = "hasAnyRole('TENANT_ADMIN','SUPER_ADMIN')";
+    // Replaced the role-based gates with module-based gates so the
+    // STAFF sub-roles (STOCK_MANAGER + MANAGER write; CASHIER +
+    // PHARMACIST + BOOKKEEPER read-only) are enforced consistently.
+    private static final String READ = "@staffAccess.canRead('inventory')";
+    private static final String WRITE = "@staffAccess.canWrite('inventory')";
 
     private final StockMovementService movementService;
     private final PharmacyReconciliationService reconciliationService;

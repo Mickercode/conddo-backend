@@ -45,12 +45,15 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/v1/pos")
-@PreAuthorize("@featureFlagGuard.requiresFlag('pos') "
-        + "and hasAnyRole('TENANT_ADMIN','STAFF','SUPER_ADMIN')")
+@PreAuthorize("@featureFlagGuard.requiresFlag('pos') and @staffAccess.canRead('pos')")
 public class PosController {
 
+    // Method-level @PreAuthorize REPLACES class-level in Spring Security 6,
+    // so write/void overrides must re-state the feature-flag check.
+    private static final String POS_WRITE = "@featureFlagGuard.requiresFlag('pos') "
+            + "and @staffAccess.canWrite('pos')";
     private static final String VOID_AUTH = "@featureFlagGuard.requiresFlag('pos') "
-            + "and hasAnyRole('TENANT_ADMIN','SUPER_ADMIN')";
+            + "and @staffAccess.ownerOnly()";
 
     private final PosSessionService sessionService;
     private final PosSaleService saleService;
@@ -63,6 +66,7 @@ public class PosController {
     // ----- sessions ----------------------------------------------------------
 
     @PostMapping("/sessions")
+    @PreAuthorize(POS_WRITE)
     public ResponseEntity<ApiResponse<Map<String, Object>>> openSession(
             @Valid @RequestBody OpenSessionRequest body,
             @AuthenticationPrincipal Jwt jwt) {
@@ -87,6 +91,7 @@ public class PosController {
     }
 
     @PostMapping("/sessions/{id}/close")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> closeSession(@PathVariable UUID id,
                                                          @Valid @RequestBody CloseSessionRequest body) {
         return ApiResponse.ok(toSessionRow(
@@ -96,6 +101,7 @@ public class PosController {
     // ----- sales -------------------------------------------------------------
 
     @PostMapping("/sales")
+    @PreAuthorize(POS_WRITE)
     public ResponseEntity<ApiResponse<Map<String, Object>>> openSale(
             @RequestBody(required = false) OpenSaleRequest body,
             @AuthenticationPrincipal Jwt jwt) {
@@ -111,12 +117,14 @@ public class PosController {
     }
 
     @PostMapping("/sales/{id}/items")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> addItem(@PathVariable UUID id,
                                                     @Valid @RequestBody AddItemRequest body) {
         return ApiResponse.ok(toSaleRow(saleService.addItem(id, body.productId(), body.qty()), null, null));
     }
 
     @PatchMapping("/sales/{id}/items/{itemId}")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> updateItem(@PathVariable UUID id,
                                                        @PathVariable UUID itemId,
                                                        @Valid @RequestBody UpdateItemRequest body) {
@@ -124,18 +132,21 @@ public class PosController {
     }
 
     @DeleteMapping("/sales/{id}/items/{itemId}")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> removeItem(@PathVariable UUID id,
                                                        @PathVariable UUID itemId) {
         return ApiResponse.ok(toSaleRow(saleService.removeItem(id, itemId), null, null));
     }
 
     @PostMapping("/sales/{id}/attach-customer")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> attachCustomer(@PathVariable UUID id,
                                                             @Valid @RequestBody AttachCustomerRequest body) {
         return ApiResponse.ok(toSaleRow(saleService.attachCustomer(id, body.customerId()), null, null));
     }
 
     @PostMapping("/sales/{id}/payments")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> addPayment(@PathVariable UUID id,
                                                        @Valid @RequestBody AddPaymentRequest body) {
         return ApiResponse.ok(toSaleRow(
@@ -143,12 +154,14 @@ public class PosController {
     }
 
     @DeleteMapping("/sales/{id}/payments/{paymentId}")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> removePayment(@PathVariable UUID id,
                                                            @PathVariable UUID paymentId) {
         return ApiResponse.ok(toSaleRow(saleService.removePayment(id, paymentId), null, null));
     }
 
     @PostMapping("/sales/{id}/complete")
+    @PreAuthorize(POS_WRITE)
     public ApiResponse<Map<String, Object>> complete(@PathVariable UUID id,
                                                      @AuthenticationPrincipal Jwt jwt) {
         UUID cashierId = UUID.fromString(jwt.getSubject());

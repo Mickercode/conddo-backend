@@ -61,7 +61,7 @@ class AuthServiceGoogleTest {
     @BeforeEach
     void setup() {
         when(hasher.hash(anyString())).thenReturn("HASH");
-        when(jwtService.issueAccessToken(any(), any(), anyString(), anyString(), anyString(), any()))
+        when(jwtService.issueAccessToken(any(), any(), anyString(), any(), anyString(), anyString(), any()))
                 .thenReturn("access.jwt");
         when(jwtService.accessTokenTtl()).thenReturn(Duration.ofMinutes(15));
         when(refreshTokenService.issue(any(), any())).thenReturn("refresh-raw");

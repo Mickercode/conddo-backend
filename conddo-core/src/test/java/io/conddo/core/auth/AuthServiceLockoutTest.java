@@ -131,7 +131,7 @@ class AuthServiceLockoutTest {
         user = givenUser();
         user.recordFailedLogin();
         user.recordFailedLogin();
-        when(jwtService.issueAccessToken(any(), any(), anyString(), any(), any(), any()))
+        when(jwtService.issueAccessToken(any(), any(), anyString(), any(), any(), any(), any()))
                 .thenReturn("access.jwt.token");
         when(jwtService.accessTokenTtl()).thenReturn(Duration.ofMinutes(15));
         when(refreshTokenService.issue(any(), any())).thenReturn("selector.verifier");
