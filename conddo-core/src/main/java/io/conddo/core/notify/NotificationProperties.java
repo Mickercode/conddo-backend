@@ -19,7 +19,17 @@ public record NotificationProperties(
 
     /** Email via Brevo (transactional) or Resend. {@code from} is the verified
      *  sender address; {@code fromName} the display name; {@code logoUrl} the
-     *  public logo URL embedded in the branded HTML templates. */
-    public record Email(String provider, String baseUrl, String apiKey, String from, String fromName, String logoUrl) {
+     *  public logo URL embedded in the branded HTML templates;
+     *  {@code templates} carries Brevo template ids per transactional kind. */
+    public record Email(String provider, String baseUrl, String apiKey, String from, String fromName,
+                        String logoUrl, Templates templates) {
+    }
+
+    /**
+     * Brevo template ids per transactional kind. Each id is optional; when null
+     * the caller falls back to the inline plain-text body so dev/test still
+     * works without Brevo configured.
+     */
+    public record Templates(Long invite) {
     }
 }

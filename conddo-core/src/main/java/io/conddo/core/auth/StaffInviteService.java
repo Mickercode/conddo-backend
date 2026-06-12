@@ -3,6 +3,7 @@ package io.conddo.core.auth;
 import io.conddo.core.domain.Tenant;
 import io.conddo.core.domain.User;
 import io.conddo.core.notify.EmailSender;
+import io.conddo.core.notify.NotificationProperties;
 import io.conddo.core.repository.TenantRepository;
 import io.conddo.core.repository.UserRepository;
 import io.conddo.core.service.BillingService;
@@ -20,8 +21,12 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -53,6 +58,7 @@ public class StaffInviteService {
     private final PasswordHasher passwordHasher;
     private final TenantSession tenantSession;
     private final EmailSender emailSender;
+    private final NotificationProperties notificationProperties;
     private final BillingService billingService;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
@@ -64,7 +70,8 @@ public class StaffInviteService {
 
     public StaffInviteService(UserRepository userRepository, TenantRepository tenantRepository,
                               PasswordHasher passwordHasher, TenantSession tenantSession,
-                              EmailSender emailSender, BillingService billingService,
+                              EmailSender emailSender, NotificationProperties notificationProperties,
+                              BillingService billingService,
                               JwtService jwtService, RefreshTokenService refreshTokenService,
                               AuthProperties properties, Clock clock,
                               @Value("${conddo.app-url:https://app.conddo.io}") String appUrl,
@@ -74,6 +81,7 @@ public class StaffInviteService {
         this.passwordHasher = passwordHasher;
         this.tenantSession = tenantSession;
         this.emailSender = emailSender;
+        this.notificationProperties = notificationProperties;
         this.billingService = billingService;
         this.jwtService = jwtService;
         this.refreshTokenService = refreshTokenService;
@@ -240,19 +248,83 @@ public class StaffInviteService {
             Tenant tenant = tenantRepository.findById(user.getTenantId())
                     .orElseThrow(() -> new IllegalStateException("Tenant vanished"));
             String acceptUrl = appUrl + "/accept-invite?token=" + rawToken;
-            String subject = tenant.getName() + " invited you to join as " + labelFor(user.getStaffRole());
-            String body = "Hi" + (user.getFullName() == null ? "" : " " + user.getFullName()) + ",\n\n"
-                    + "You've been invited to join " + tenant.getName()
-                    + " on Conddo as a " + labelFor(user.getStaffRole()) + ".\n\n"
-                    + "Accept the invite and set your password here:\n"
-                    + acceptUrl + "\n\n"
-                    + "This link expires in 72 hours.\n";
-            emailSender.send(user.getEmail(), subject, body);
+            String roleLabel = labelFor(user.getStaffRole());
+            String subject = tenant.getName() + " invited you to join as " + roleLabel;
+            String fallbackBody = inlineFallbackBody(user, tenant, roleLabel, acceptUrl);
+
+            Long templateId = templateId();
+            if (templateId == null) {
+                emailSender.send(user.getEmail(), subject, fallbackBody);
+                return;
+            }
+            String invitedByName = user.getInvitedByUserId() == null ? null
+                    : userRepository.findById(user.getInvitedByUserId())
+                            .map(User::getFullName).orElse(null);
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("firstName", firstName(user.getFullName()));
+            params.put("tenantName", tenant.getName());
+            params.put("roleLabel", roleLabel);
+            params.put("roleAccessLines", roleAccessLines(user.getStaffRole()));
+            params.put("invitedByName", invitedByName);
+            params.put("acceptUrl", acceptUrl);
+            params.put("expiresAt",
+                    OffsetDateTime.now(clock).plus(inviteTtl).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+            emailSender.sendTemplate(user.getEmail(), templateId, params, subject, fallbackBody);
         } catch (RuntimeException ex) {
             // Never let an email outage block the invite — the row is
             // saved, the admin can resend.
             log.warn("Invite email failed for {}: {}", user.getEmail(), ex.getMessage());
         }
+    }
+
+    private Long templateId() {
+        NotificationProperties.Email email = notificationProperties == null
+                ? null : notificationProperties.email();
+        NotificationProperties.Templates templates = email == null ? null : email.templates();
+        return templates == null ? null : templates.invite();
+    }
+
+    private static String inlineFallbackBody(User user, Tenant tenant, String roleLabel, String acceptUrl) {
+        return "Hi" + (user.getFullName() == null ? "" : " " + user.getFullName()) + ",\n\n"
+                + "You've been invited to join " + tenant.getName()
+                + " on Conddo as a " + roleLabel + ".\n\n"
+                + "Accept the invite and set your password here:\n"
+                + acceptUrl + "\n\n"
+                + "This link expires in 72 hours.\n";
+    }
+
+    private static String firstName(String fullName) {
+        if (fullName == null || fullName.isBlank()) {
+            return "there";
+        }
+        String first = fullName.trim().split("\\s+")[0];
+        return first.isEmpty() ? "there" : first;
+    }
+
+    /**
+     * Plain-English access lines per sub-role — passed as a list so
+     * the Brevo template can render them as bullets. Keep in sync
+     * with {@code StaffService.roles().permissions}.
+     */
+    private static List<String> roleAccessLines(String staffRole) {
+        return switch (staffRole == null ? "" : staffRole) {
+            case "MANAGER" -> List.of(
+                    "Everything except billing + staff invites",
+                    "Inventory, sales, orders, customers, analytics");
+            case "PHARMACIST" -> List.of(
+                    "Clinical access: EMR, prescriptions, consultations",
+                    "Read-only inventory, orders, customers, analytics");
+            case "CASHIER" -> List.of(
+                    "POS sales (open shifts, run sales, take payments)",
+                    "Read-only customers, orders, payments, inventory");
+            case "STOCK_MANAGER" -> List.of(
+                    "Inventory: restock, reconciliation, bulk upload, movement log",
+                    "Read-only orders, customers, analytics");
+            case "BOOKKEEPER" -> List.of(
+                    "Read-only orders, payments, analytics, customers",
+                    "CSV exports for reconciliation");
+            default -> List.of();
+        };
     }
 
     // ----- DTOs --------------------------------------------------------------

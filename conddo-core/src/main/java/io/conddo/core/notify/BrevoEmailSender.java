@@ -75,4 +75,27 @@ public class BrevoEmailSender implements EmailSender {
             log.error("Brevo email to {} failed: {}", toEmail, ex.getMessage());
         }
     }
+
+    @Override
+    public void sendTemplate(String toEmail, long templateId, Map<String, Object> params,
+                             String fallbackSubject, String fallbackBody) {
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("sender", Map.of("name", fromName, "email", fromEmail));
+            payload.put("to", List.of(Map.of("email", toEmail)));
+            payload.put("templateId", templateId);
+            if (params != null && !params.isEmpty()) {
+                payload.put("params", params);
+            }
+            restClient.post()
+                    .uri("/v3/smtp/email")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(payload)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RuntimeException ex) {
+            log.error("Brevo templated email to {} (templateId={}) failed: {}",
+                    toEmail, templateId, ex.getMessage());
+        }
+    }
 }
