@@ -126,4 +126,25 @@ public class StaffUser implements LockableAccount {
     public OffsetDateTime getCreatedAt() {
         return createdAt;
     }
+
+    /** Overwrite the stored password hash. Caller hashes with the live
+     *  {@code PasswordHasher} before calling — this method does no hashing
+     *  itself. Used by the platform-superadmin bootstrap so the deploy owner
+     *  can recover access without DB shell. */
+    public void resetPasswordHash(String newHash) {
+        if (newHash == null || newHash.isBlank()) {
+            throw new IllegalArgumentException("Password hash cannot be blank");
+        }
+        this.passwordHash = newHash;
+    }
+
+    public void changeInternalRole(String role) {
+        if (role != null && !role.isBlank()) {
+            this.internalRole = role;
+        }
+    }
+
+    public void setActive(boolean active) {
+        this.active = active;
+    }
 }
