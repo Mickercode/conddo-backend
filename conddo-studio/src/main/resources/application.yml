@@ -11,6 +11,21 @@ spring:
     url: ${STUDIO_DB_URL:jdbc:postgresql://localhost:5432/conddo}
     username: ${STUDIO_DB_USER:conddo_owner}
     password: ${STUDIO_DB_PASSWORD:owner_password}
+    hikari:
+      # Every Studio query that touches a `public.*` table (tenants,
+      # tenant_feature_flags, tenant_sites, …) is cross-tenant by nature.
+      # Those tables have RLS policies that match either the per-tenant
+      # `app.tenant_id` setting OR the `app.cross_tenant=true` carve-out.
+      # The deploy expects Studio to land in the bypass branch — but
+      # relying on `BYPASSRLS` being set on the connecting role makes
+      # this work or fail invisibly per Postgres deploy. Setting the
+      # session var on every pooled connection makes the carve-out
+      # explicit and independent of role attributes. Costs one
+      # parameter-setting round-trip per new connection (Hikari runs
+      # this once at connection-create, not per query). Studio's own
+      # tables in `studio.*` / `jobs.*` schemas don't have RLS, so the
+      # var only matters when reading platform tables.
+      connection-init-sql: "SET SESSION app.cross_tenant = 'true'"
   jpa:
     hibernate:
       ddl-auto: validate
