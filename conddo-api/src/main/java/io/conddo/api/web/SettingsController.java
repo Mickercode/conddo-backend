@@ -3,6 +3,8 @@ package io.conddo.api.web;
 import io.conddo.api.web.dto.BrandingRequest;
 import io.conddo.api.web.dto.BusinessProfileRequest;
 import io.conddo.api.web.dto.BusinessProfileResponse;
+import io.conddo.api.web.dto.EmailBrandingRequest;
+import io.conddo.api.web.dto.EmailBrandingResponse;
 import io.conddo.core.common.ApiResponse;
 import io.conddo.core.service.SettingsService;
 import jakarta.validation.Valid;
@@ -49,6 +51,18 @@ public class SettingsController {
     public ApiResponse<BrandingRequest> updateBranding(@RequestBody BrandingRequest request) {
         return ApiResponse.ok(BrandingRequest.from(
                 settingsService.updateBranding(request.primaryColor(), request.logoUrl())));
+    }
+
+    @GetMapping("/email-branding")
+    public ApiResponse<EmailBrandingResponse> emailBranding() {
+        return ApiResponse.ok(EmailBrandingResponse.from(settingsService.businessProfile()));
+    }
+
+    @PutMapping("/email-branding")
+    public ApiResponse<EmailBrandingResponse> updateEmailBranding(
+            @Valid @RequestBody EmailBrandingRequest request) {
+        return ApiResponse.ok(EmailBrandingResponse.from(
+                settingsService.updateEmailBranding(request.fromName(), request.replyTo())));
     }
 
     @PutMapping("/social-handles")

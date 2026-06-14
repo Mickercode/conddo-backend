@@ -70,6 +70,20 @@ public class SettingsService {
         return tenantRepository.save(tenant);
     }
 
+    /**
+     * V52 — tenant email branding. Either field is independently
+     * nullable; null/blank clears the override and falls back to the
+     * business name + contact email respectively.
+     */
+    @Transactional
+    public Tenant updateEmailBranding(String fromName, String replyTo) {
+        tenantSession.bind();
+        Tenant tenant = requireTenant();
+        tenant.setEmailFromName(fromName);
+        tenant.setEmailReplyTo(replyTo);
+        return tenantRepository.save(tenant);
+    }
+
     @Transactional
     public Map<String, Object> updateSocialHandles(Map<String, Object> handles) {
         tenantSession.bind();

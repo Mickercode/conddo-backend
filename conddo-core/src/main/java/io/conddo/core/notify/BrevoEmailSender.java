@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClient;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Real email channel via Brevo (transactional email). Enabled only when
@@ -22,6 +23,11 @@ import java.util.Map;
  * recipient (300/day) without a verified domain — only a verified sender address
  * is required (set {@code conddo.notifications.email.from}). Delivery failures
  * are logged and never break the calling flow (e.g. signup).
+ *
+ * <p>Per-tenant branding (V52): when a tenant is bound to the current
+ * request, {@link TenantEmailBrandingResolver} supplies the tenant's
+ * display name + reply-to. The {@code from} address stays the global
+ * verified one (Brevo requires that).
  */
 @Component
 @Primary
@@ -34,8 +40,10 @@ public class BrevoEmailSender implements EmailSender {
     private final RestClient restClient;
     private final String fromEmail;
     private final String fromName;
+    private final TenantEmailBrandingResolver brandingResolver;
 
-    public BrevoEmailSender(NotificationProperties properties, RestClient.Builder restClientBuilder) {
+    public BrevoEmailSender(NotificationProperties properties, RestClient.Builder restClientBuilder,
+                            TenantEmailBrandingResolver brandingResolver) {
         NotificationProperties.Email email = properties.email();
         String baseUrl = email.baseUrl() != null && !email.baseUrl().isBlank() ? email.baseUrl() : DEFAULT_BASE_URL;
         this.restClient = restClientBuilder
@@ -44,6 +52,7 @@ public class BrevoEmailSender implements EmailSender {
                 .build();
         this.fromEmail = email.from();
         this.fromName = email.fromName() != null && !email.fromName().isBlank() ? email.fromName() : "Conddo";
+        this.brandingResolver = brandingResolver;
     }
 
     @Override
@@ -55,7 +64,7 @@ public class BrevoEmailSender implements EmailSender {
     public void sendHtml(String toEmail, String subject, String htmlBody, String textBody) {
         try {
             Map<String, Object> payload = new HashMap<>();
-            payload.put("sender", Map.of("name", fromName, "email", fromEmail));
+            applyBranding(payload);
             payload.put("to", List.of(Map.of("email", toEmail)));
             payload.put("subject", subject);
             if (htmlBody != null) {
@@ -81,7 +90,7 @@ public class BrevoEmailSender implements EmailSender {
                              String fallbackSubject, String fallbackBody) {
         try {
             Map<String, Object> payload = new HashMap<>();
-            payload.put("sender", Map.of("name", fromName, "email", fromEmail));
+            applyBranding(payload);
             payload.put("to", List.of(Map.of("email", toEmail)));
             payload.put("templateId", templateId);
             if (params != null && !params.isEmpty()) {
@@ -97,5 +106,23 @@ public class BrevoEmailSender implements EmailSender {
             log.error("Brevo templated email to {} (templateId={}) failed: {}",
                     toEmail, templateId, ex.getMessage());
         }
+    }
+
+    /**
+     * Sets sender + optional replyTo on the payload. When a tenant is
+     * bound to the current request, the tenant's display name overrides
+     * the global "Conddo" and the tenant's contact email (or override)
+     * is added as Reply-To.
+     */
+    private void applyBranding(Map<String, Object> payload) {
+        Optional<TenantEmailBranding> branding = brandingResolver.currentBranding();
+        String senderName = branding
+                .map(TenantEmailBranding::fromName)
+                .filter(s -> s != null && !s.isBlank())
+                .orElse(fromName);
+        payload.put("sender", Map.of("name", senderName, "email", fromEmail));
+        branding.map(TenantEmailBranding::replyTo)
+                .filter(s -> s != null && !s.isBlank())
+                .ifPresent(replyTo -> payload.put("replyTo", Map.of("email", replyTo)));
     }
 }

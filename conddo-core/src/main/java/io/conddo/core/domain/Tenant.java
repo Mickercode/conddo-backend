@@ -111,6 +111,18 @@ public class Tenant {
     @Column(name = "notification_prefs")
     private Map<String, Object> notificationPrefs;
 
+    /**
+     * Per-tenant email branding (V52). When null, outbound emails fall back to
+     * sensible defaults — {@code emailFromName} → {@link #name} so the recipient
+     * still sees the tenant, and {@code emailReplyTo} → {@link #contactEmail}
+     * so replies go to the tenant's contact.
+     */
+    @Column(name = "email_from_name", length = 150)
+    private String emailFromName;
+
+    @Column(name = "email_reply_to", length = 254)
+    private String emailReplyTo;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;
@@ -335,5 +347,40 @@ public class Tenant {
 
     public OffsetDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    // ----- email branding (V52) -----------------------------------------------
+
+    public String getEmailFromName() {
+        return emailFromName;
+    }
+
+    /** Null clears the override → outbound emails fall back to the business name. */
+    public void setEmailFromName(String emailFromName) {
+        this.emailFromName = (emailFromName == null || emailFromName.isBlank())
+                ? null : emailFromName.trim();
+    }
+
+    public String getEmailReplyTo() {
+        return emailReplyTo;
+    }
+
+    /** Null clears the override → outbound emails fall back to contactEmail. */
+    public void setEmailReplyTo(String emailReplyTo) {
+        this.emailReplyTo = (emailReplyTo == null || emailReplyTo.isBlank())
+                ? null : emailReplyTo.trim();
+    }
+
+    /** The display name to show on outbound emails — override > business name. */
+    public String effectiveEmailFromName() {
+        return emailFromName != null && !emailFromName.isBlank() ? emailFromName : name;
+    }
+
+    /** The reply-to to set on outbound emails — override > contact email > null. */
+    public String effectiveEmailReplyTo() {
+        if (emailReplyTo != null && !emailReplyTo.isBlank()) {
+            return emailReplyTo;
+        }
+        return contactEmail != null && !contactEmail.isBlank() ? contactEmail : null;
     }
 }
