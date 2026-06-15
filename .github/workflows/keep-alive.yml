@@ -1,0 +1,46 @@
+name: Keep Render awake
+
+# Render's free tier idles the service after ~15 minutes of inactivity,
+# producing 30–60s cold-start delays for the next visitor. This workflow
+# pings the public health endpoint every 10 minutes so the dyno stays
+# warm.
+#
+# Not a substitute for real uptime monitoring — pair with UptimeRobot
+# (or equivalent) so a real outage actually pages someone. This is just
+# the cheapest "the platform feels live" knob.
+#
+# To stop: set the repo variable PING_DISABLED=true (or delete this file).
+# To change the URL: set the repo variable CONDDO_BACKEND_URL.
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub Actions schedules can drift by several
+    # minutes, but 10-min cadence keeps us comfortably inside Render's
+    # 15-minute idle window even with worst-case skew.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    name: Ping /actuator/health
+    runs-on: ubuntu-latest
+    if: vars.PING_DISABLED != 'true'
+    steps:
+      - name: Resolve target URL
+        id: target
+        run: |
+          URL="${{ vars.CONDDO_BACKEND_URL }}"
+          if [ -z "$URL" ]; then
+            URL="https://conddo-backend.onrender.com"
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Ping
+        run: |
+          set -euo pipefail
+          URL="${{ steps.target.outputs.url }}/actuator/health"
+          echo "Pinging $URL"
+          # 90s max to absorb a cold start. -f makes curl exit non-zero on
+          # HTTP 5xx so a real outage shows up as a failed workflow run.
+          curl --fail --silent --show-error --max-time 90 "$URL" | head -c 200
+          echo ""
