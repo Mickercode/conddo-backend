@@ -22,8 +22,7 @@ CREATE TABLE tenants (
 -- USERS — platform users, scoped to a tenant (except SUPER_ADMIN, handled later).
 CREATE TABLE users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id     UUID        NOT NULL REFERENCES tenants(id) ON DELETE CA
-    SCADE,
+    tenant_id     UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     email         TEXT        NOT NULL,
     password_hash TEXT        NOT NULL,
     full_name     TEXT,
