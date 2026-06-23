@@ -31,6 +31,8 @@ spring:
     password: ${CONDDO_DB_OWNER_PASSWORD:owner_password}
     placeholders:
       app_role: ${CONDDO_DB_APP_USER:app_user}
+    connect-retries: 10
+    connect-retries-interval: 10s
 
   data:
     redis:
